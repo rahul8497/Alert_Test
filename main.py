@@ -6,7 +6,7 @@ from datetime import datetime
 # ==========================================
 # PASTE YOUR DETAILS HERE
 # ==========================================
-TELEGRAM_BOT_TOKEN = "8992095386:AAfexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"  # From your Notepad screenshot
+TELEGRAM_BOT_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"  # From your Notepad screenshot
 TELEGRAM_CHAT_ID = "1136613703"                                      # From your Notepad screenshot
 
 def send_telegram_alert(message):
