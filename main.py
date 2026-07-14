@@ -8,29 +8,31 @@ import requests
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-SYMBOL = "BTC/USDT"
+SYMBOL = "ETH/USDT"  # Tracked asset matching your chart
 TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  # 0.5%
 SWING_LENGTH = 10
+BOX_WIDTH = 2.5        # Replicates the Pine Script 'Supply/Demand Box Width' multiplier
 
-# 🔴 TELEGRAM CREDENTIALS (REPLACE THESE WITH YOURS)
-TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
-TELEGRAM_CHAT_ID = "1136613703"
+# 🔴 TELEGRAM CREDENTIALS
+TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
 
-# State cache tracking to avoid duplicate alert spamming
-# Structure: { "3m_Operator_Bull": Timestamp, ... }
+# Global data stores for zone structures
+# Format: {"3m": [{"top": x, "bottom": y, "type": "demand"}, ...]}
+active_zones = {tf: [] for tf in TIMEFRAMES}
 alert_state_cache = {}
 
 # Initialize exchange connection
 exchange = ccxt.binance({
     'enableRateLimit': True,
-    'options': {'defaultType': 'future'}  # Uses perpetual data
+    'options': {'defaultType': 'future'}
 })
 
 def send_telegram_message(message):
-    """Sends a real-time markdown message to the assigned Telegram Chat ID."""
+    """Transmits real-time alert updates directly to Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -42,10 +44,10 @@ def send_telegram_message(message):
         if response.status_code != 200:
             print(f"Telegram API Error: {response.text}")
     except Exception as e:
-        print(f"Failed to transmit Telegram network request: {e}")
+        print(f"Network error sending Telegram notification: {e}")
 
 def fetch_candles(symbol, timeframe, limit=100):
-    """Fetches historical candlestick data from the exchange."""
+    """Fetches clean OHLCV structural tracking metrics from the API."""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -56,54 +58,54 @@ def fetch_candles(symbol, timeframe, limit=100):
         return None
 
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message):
-    """Checks the global state cache and triggers an alert if this is a fresh occurrence."""
+    """Enforces state constraints to prevent repetitive alert spamming."""
     global alert_state_cache
-    
-    # If this specific candle has already triggered this specific alert, skip it
     if alert_state_cache.get(alert_key) == current_timestamp:
         return
         
-    # Update cache state
     alert_state_cache[alert_key] = current_timestamp
     
-    # Format Telegram payload string using clean markdown formatting
     tg_message = (
-        f"🚨 *[ALERT] [{timeframe.upper()}]* 🚨\n\n"
+        f"🚨 *[SIGNAL MATCHED] [{timeframe.upper()}]* 🚨\n\n"
         f"• *Asset:* `{symbol}`\n"
-        f"• *Signal Type:* `{alert_type}`\n"
-        f"• *Details:* {message}"
+        f"• *Signal:* `{alert_type}`\n"
+        f"• *Context:* {message}"
     )
-    
-    print(f"Triggering Alert: {alert_key} for candle time {current_timestamp}")
+    print(f"Sending Alert: {alert_key}")
     send_telegram_message(tg_message)
 
 # ==========================================
-# INDICATOR CORE ENGINE
+# INDICATOR ENGINE WITH DYNAMIC BOX MATCHING
 # ==========================================
 def analyze_market(df, df_15m=None):
-    """Processes indicator signals and routes live alerts."""
+    global active_zones
     if len(df) < TREND_LENGTH + 10:
         return
     
     tf = df.timeframe_meta
-    
-    # Target the most recently completed/closed candle [-2] for matrix analysis
-    # Target index [-1] is the incomplete live candle, which will generate duplicate alerts
     target_candle_time = str(df['timestamp'].iloc[-2])
-
-    # --- 1. Linear Regression Trend Line ---
-    linreg_series = ta.linreg(df['close'], length=TREND_LENGTH)
-
-    # --- 2. RSI Execution ---
-    df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     
-    # --- 3. Operator Candles Logic ---
+    # Live running candle stats (Index -1)
+    live_open = df['open'].iloc[-1]
+    live_high = df['high'].iloc[-1]
+    live_low = df['low'].iloc[-1]
+    live_close = df['close'].iloc[-1]
+
+    # --- 1. Technical Framework Calculations ---
+    df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
+    df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
+    
+    atr_val = df['atr'].iloc[-1] if not pd.isna(df['atr'].iloc[-1]) else df['close'].iloc[-1] * 0.002
+    atr_buffer = atr_val * (BOX_WIDTH / 10.0)
+
+    # --- 2. Multi-Timeframe 15m RSI Logic ---
     if df_15m is not None and not df_15m.empty:
         df_15m['rsi'] = ta.rsi(df_15m['close'], length=RSI_LENGTH)
         rsi_15m = df_15m['rsi'].iloc[-1]
     else:
         rsi_15m = df['rsi'].iloc[-2]
 
+    # --- 3. Operator Candles Logic ---
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
 
@@ -123,59 +125,83 @@ def analyze_market(df, df_15m=None):
     bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
                      (red_move_pct >= PCT_THRESH) and (30 < rsi_15m < 50))
 
-    # --- 4. Supply & Demand Zone Structural Pivot Logic ---
-    idx = -(SWING_LENGTH + 2) # Check standard fixed historical displacement window
+    if bull_reversal:
+        process_alert(f"{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", SYMBOL, tf, "Institutional buying footprint established with 15m RSI verification.")
+    if bear_reversal:
+        process_alert(f"{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", SYMBOL, tf, "Institutional selling footprint established with 15m RSI verification.")
+
+    # --- 4. Supply & Demand Box Generation ---
+    idx = -(SWING_LENGTH + 2)
+    is_swing_high, is_swing_low = True, True
     
-    is_swing_high = True
-    is_swing_low = True
-    
-    # Pivot High verification loop
     for check_i in range(1, SWING_LENGTH + 1):
         if df['high'].iloc[idx] <= df['high'].iloc[idx - check_i] or df['high'].iloc[idx] <= df['high'].iloc[idx + check_i]:
             is_swing_high = False
             break
-            
-    # Pivot Low verification loop
     for check_i in range(1, SWING_LENGTH + 1):
         if df['low'].iloc[idx] >= df['low'].iloc[idx - check_i] or df['low'].iloc[idx] >= df['low'].iloc[idx + check_i]:
             is_swing_low = False
             break
 
-    # --- 5. Routing Match System ---
-    if bull_reversal:
-        process_alert(f"{tf}_operator_bull", target_candle_time, "Operator Bull Candle", SYMBOL, tf, "Reversal pattern verified with 15m RSI cross confirmation filters.")
-        
-    if bear_reversal:
-        process_alert(f"{tf}_operator_bear", target_candle_time, "Operator Bear Candle", SYMBOL, tf, "Reversal pattern verified with 15m RSI cross confirmation filters.")
-        
+    # Add verified swing highs as Supply Box structures
     if is_swing_high:
-        pivot_time = str(df['timestamp'].iloc[idx])
-        process_alert(f"{tf}_supply_zone", pivot_time, "New Supply Zone Established", SYMBOL, tf, f"Structural peak point registered at price level {df['high'].iloc[idx]}")
-        
+        top_edge = df['high'].iloc[idx]
+        bottom_edge = top_edge - atr_buffer
+        # Prevent overlapping duplicate zone tracking entries
+        if not any(abs(z['top'] - top_edge) < atr_buffer for z in active_zones[tf]):
+            active_zones[tf].append({"top": top_edge, "bottom": bottom_edge, "type": "supply"})
+            
+    # Add verified swing lows as Demand Box structures
     if is_swing_low:
-        pivot_time = str(df['timestamp'].iloc[idx])
-        process_alert(f"{tf}_demand_zone", pivot_time, "New Demand Zone Established", SYMBOL, tf, f"Structural trough point registered at price level {df['low'].iloc[idx]}")
+        bottom_edge = df['low'].iloc[idx]
+        top_edge = bottom_edge + atr_buffer
+        if not any(abs(z['bottom'] - bottom_edge) < atr_buffer for z in active_zones[tf]):
+            active_zones[tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
+
+    # --- 5. Live Candle Interaction Check (Zone Touches) ---
+    remaining_zones = []
+    for zone in active_zones[tf]:
+        invalidated = False
+        
+        if zone['type'] == "demand":
+            # Re-test match condition: Candle dips low enough to enter the box area
+            if live_low <= zone['top'] and live_high >= zone['bottom']:
+                process_alert(f"{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", SYMBOL, tf, 
+                              f"Price retraced down into historical structural support window: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`")
+            
+            # Break of Structure (BOS) mitigation check
+            if live_close < zone['bottom']:
+                invalidated = True
+                
+        elif zone['type'] == "supply":
+            # Re-test match condition: Candle spikes high enough to enter the box area
+            if live_high >= zone['bottom'] and live_low <= zone['top']:
+                process_alert(f"{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", SYMBOL, tf, 
+                              f"Price pushed up into historical structural resistance window: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`")
+            
+            if live_close > zone['top']:
+                invalidated = True
+
+        if not invalidated:
+            remaining_zones.append(zone)
+            
+    active_zones[tf] = remaining_zones
 
 # ==========================================
-# SYSTEM RUNTIME EXECUTION LOOP
+# CORE LOOP ENGINE
 # ==========================================
-print(f"Starting Multi-Timeframe Telegram Bot Engine for {SYMBOL}...")
-send_telegram_message(f"🚀 *Algorithmic Trading Bot Scanner Online* for `{SYMBOL}`. Monitoring 3m, 5m, 15m, 1h, 4h, and 1d timeframes...")
+print(f"Scanning engine initializing for {SYMBOL}...")
+send_telegram_message(f"✅ *Scanner Matrix Live* for `{SYMBOL}`. Actively tracking OCs and Zone Touches across all timeframes.")
 
 while True:
     try:
-        # Pre-fetch context structural tracking metrics
         df_15m = fetch_candles(SYMBOL, "15m", limit=100)
-        
         for tf in TIMEFRAMES:
             df = fetch_candles(SYMBOL, tf, limit=100)
             if df is not None:
                 df.timeframe_meta = tf
                 analyze_market(df, df_15m)
-                
-        # Scans the tickers every 15 seconds for rapid state detection
-        time.sleep(15)
-        
+        time.sleep(10)
     except Exception as e:
-        print(f"System Loop Failure Context Exception: {e}")
+        print(f"Loop runtime exception encounter: {e}")
         time.sleep(5)
