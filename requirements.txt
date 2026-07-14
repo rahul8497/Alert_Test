@@ -1,5 +1,4 @@
 pandas
-yfinance
-pandas_ta
 requests
 Flask
+gunicorn
