@@ -11,7 +11,7 @@ import yfinance as yf
 # ==========================================
 # Expanded asset universe. '^NSEI' represents the Nifty 50 index ticker
 SYMBOLS = ["ETH/USDT", "BTC/USDT", "XAU/USD", "^NSEI"]
-TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
+TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
