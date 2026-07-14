@@ -1,38 +1,43 @@
-
+import pandas as pd
 import requests
 import time
 from datetime import datetime
+import threading
+from flask import Flask
+import os
 
 # ==========================================
-# PASTE YOUR DETAILS HERE
+# CONFIGURATION SETTINGS
 # ==========================================
-TELEGRAM_BOT_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"  # From your Notepad screenshot
-TELEGRAM_CHAT_ID = "1136613703"                                      # From your Notepad screenshot
+TELEGRAM_BOT_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
+TELEGRAM_CHAT_ID = "1136613703"
+
+app = Flask(__name__)
 
 def send_telegram_alert(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message}
     try:
-        response = requests.post(url, json=payload)
-        if response.status_code == 200:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Success! Message delivered to Telegram.")
-        else:
-            print(f"❌ Failed! Telegram API responded with: {response.text}")
-    except Exception as e:
-        print(f"❌ Network Error: Could not reach Telegram server. Details: {e}")
+        requests.post(url, json=payload, timeout=10)
+    except Exception:
+        pass
 
 # ==========================================
-# RUN THE VM TEST
+# EVERY PING RUNS THE DUMMY TEST CODE
 # ==========================================
-print("🚀 Starting Dummy Server Test from VM...")
+@app.route('/')
+def home():
+    print("Incoming Ping! Running dummy test...")
+    
+    # Send the 3 exact test alerts like the old script did
+    send_telegram_alert("👋 Hello from your Cloud Render Server! The connection works.")
+    time.sleep(1)
+    send_telegram_alert("🔄 Loop test message #1 from the server.")
+    time.sleep(1)
+    send_telegram_alert("✅ Test complete! If you see this, the tool is up and continuous.")
+    
+    return "Dummy test executed! Check your Telegram."
 
-# Test 1: Immediate verification message
-send_telegram_alert("👋 Hello from your Cloud VM! The basic connection works.")
-
-# Test 2: Simulating a tiny 2-step loop to ensure stability
-print("Running loop check...")
-for i in range(1, 3):
-    time.sleep(3)
-    send_telegram_alert(f"🔄 Loop test message #{i} from the server.")
-
-print("🏁 Test complete! If your phone received 3 alerts, your VM can talk to Telegram.")
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
