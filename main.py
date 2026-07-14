@@ -17,8 +17,8 @@ SWING_LENGTH = 10
 BOX_WIDTH = 2.5        # Replicates the Pine Script 'Supply/Demand Box Width' multiplier
 
 # 🔴 TELEGRAM CREDENTIALS
-TELEGRAM_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"
+TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
+TELEGRAM_CHAT_ID = "1136613703"
 
 # Global data stores for zone structures
 # Format: {"3m": [{"top": x, "bottom": y, "type": "demand"}, ...]}
