@@ -1,5 +1,4 @@
 import time
-import ccxt
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -9,13 +8,14 @@ import yfinance as yf
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Switched crypto to standard Spot tickers to bypass geo-restrictions
-SYMBOLS = ["ETH/USDT", "BTC/USDT", "GC=F", "^NSEI"]
+# All assets mapped to clean Yahoo Finance Tickers to bypass Binance geo-blocks completely
+# Crypto: ETH-USD, BTC-USD | Commodities: GC=F (Gold) | Indices: ^NSEI (Nifty 50)
+SYMBOLS = ["ETH-USD", "BTC-USD"]
 TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
-PCT_THRESH = 0.5 / 100  
+PCT_THRESH = 0.5 / 100  # 0.5% threshold filter
 SWING_LENGTH = 10
 BOX_WIDTH = 2.5        
 
@@ -23,16 +23,12 @@ BOX_WIDTH = 2.5
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
+# Global data stores for zone structures mapped by asset and timeframe
 active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in SYMBOLS}
 alert_state_cache = {}
 
-# 🟢 FIX: Configured to pull from standard open Spot markets to prevent HTTP 451 blocks
-binance_exchange = ccxt.binance({
-    'enableRateLimit': True,
-    'options': {'defaultType': 'spot'}  # Changed from 'future' to 'spot'
-})
-
 def send_telegram_message(message):
+    """Transmits real-time alert updates directly to Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
@@ -41,38 +37,51 @@ def send_telegram_message(message):
         print(f"Network error sending Telegram notification: {e}")
 
 def fetch_candles(symbol, timeframe, limit=100):
+    """Fetches clean multi-timeframe market matrices through Yahoo Finance API pipes."""
     try:
-        if symbol in ["^NSEI", "GC=F"]:
-            yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "4h": "1h", "1d": "1d"}
-            yf_tf = yf_tf_map.get(timeframe, "5m")
+        # Convert our operational timeframes to yfinance interval specifications
+        yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "4h": "1h", "1d": "1d"}
+        yf_tf = yf_tf_map.get(timeframe, "5m")
+        
+        # Determine data padding history requirements per request layer
+        period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "5d", "1h": "7d", "1d": "3mo"}
+        yf_period = period_map.get(yf_tf, "5d")
+        
+        ticker = yf.Ticker(symbol)
+        history = ticker.history(period=yf_period, interval=yf_tf)
+        
+        if history.empty:
+            return None
             
-            ticker = yf.Ticker(symbol)
-            period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "5d", "1h": "7d", "1d": "1mo"}
-            history = ticker.history(period=period_map.get(yf_tf, "5d"), interval=yf_tf)
-            
-            if history.empty:
-                return None
-                
-            df = history.reset_index()
-            df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
-            df = df.tail(limit).copy()
-            return df
-        else:
-            ohlcv = binance_exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
+        df = history.reset_index()
+        # Standardize column naming rules globally across data models
+        df.rename(columns={
+            "Datetime": "timestamp", "Date": "timestamp", 
+            "Open": "open", "High": "high", "Low": "low", "Close": "close", 
+            "Volume": "volume"
+        }, inplace=True)
+        
+        df = df.tail(limit).copy()
+        return df
     except Exception as e:
         print(f"Error fetching data for {symbol} on {timeframe}: {e}")
         return None
 
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message):
+    """Enforces state constraints to prevent repetitive alert spamming."""
     global alert_state_cache
     if alert_state_cache.get(alert_key) == current_timestamp:
         return
         
     alert_state_cache[alert_key] = current_timestamp
-    display_names = {"^NSEI": "NIFTY 50", "GC=F": "GOLD FUTURES"}
+    
+    # Clean up asset names for Telegram notifications
+    display_names = {
+        "^NSEI": "NIFTY 50", 
+        "GC=F": "GOLD FUTURES",
+        "BTC-USD": "BTC/USD",
+        "ETH-USD": "ETH/USD"
+    }
     display_name = display_names.get(symbol, symbol)
     
     tg_message = (
@@ -85,6 +94,9 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     print(f"Sending Alert: {alert_key}")
     send_telegram_message(tg_message)
 
+# ==========================================
+# INDICATOR ENGINE
+# ==========================================
 def analyze_market(df, symbol):
     global active_zones
     if len(df) < TREND_LENGTH + 10:
@@ -181,12 +193,13 @@ def analyze_market(df, symbol):
 # ==========================================
 # RUNTIME LOOP
 # ==========================================
-print(f"Unified Scanner Matrix Online for {SYMBOLS}")
-send_telegram_message("🚀 *Multi-Asset Spot Scanner Online* 🚀\nMonitoring setups safely globally across all intervals.")
+print(f"Unified Global Cloud Scanner Online for {SYMBOLS}")
+send_telegram_message("🚀 *Global Cloud Multi-Asset Scanner Online* 🚀\nAll asset filters running completely open without geo-blocking paths.")
 
 while True:
     try:
         for symbol in SYMBOLS:
+            # Skip checking Nifty entirely if traditional stock market closures hit
             if symbol == "^NSEI":
                 current_utc_day = time.gmtime().tm_wday
                 if current_utc_day >= 5:
