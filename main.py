@@ -132,13 +132,13 @@ def analyze_market(df, symbol):
     red_move_pct = (high_curr - close_curr) / high_curr if high_curr != 0 else 0
     is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
     
-    bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear store and 
+    bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
                      (red_move_pct >= PCT_THRESH) and (30 < local_rsi < 50))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Buy structural confirmation validated. RSI: {local_rsi:.2f}")
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Buy structural configuration validated. RSI: {local_rsi:.2f}")
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell structural confirmation validated. RSI: {local_rsi:.2f}")
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell structural configuration validated. RSI: {local_rsi:.2f}")
 
     # --- Supply & Demand Box Generation ---
     idx = -(SWING_LENGTH + 2)
