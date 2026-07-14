@@ -9,13 +9,13 @@ import yfinance as yf
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Assets Universe: Crypto uses CCXT, Commodities & Indices use Yahoo Finance
+# Switched crypto to standard Spot tickers to bypass geo-restrictions
 SYMBOLS = ["ETH/USDT", "BTC/USDT", "GC=F", "^NSEI"]
 TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
-PCT_THRESH = 0.5 / 100  # 0.5% threshold filter
+PCT_THRESH = 0.5 / 100  
 SWING_LENGTH = 10
 BOX_WIDTH = 2.5        
 
@@ -23,15 +23,16 @@ BOX_WIDTH = 2.5
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
-# Global data stores for zone structures mapped by asset and timeframe
 active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in SYMBOLS}
 alert_state_cache = {}
 
-# Initialize Binance for Crypto tracking
-binance_exchange = ccxt.binance({'enableRateLimit': True, 'options': {'defaultType': 'future'}})
+# 🟢 FIX: Configured to pull from standard open Spot markets to prevent HTTP 451 blocks
+binance_exchange = ccxt.binance({
+    'enableRateLimit': True,
+    'options': {'defaultType': 'spot'}  # Changed from 'future' to 'spot'
+})
 
 def send_telegram_message(message):
-    """Transmits real-time alert updates directly to Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
@@ -40,9 +41,7 @@ def send_telegram_message(message):
         print(f"Network error sending Telegram notification: {e}")
 
 def fetch_candles(symbol, timeframe, limit=100):
-    """Intelligently routes requests to Binance or Yahoo Finance based on asset type."""
     try:
-        # Route 1: Yahoo Finance for Gold (GC=F) and Nifty (^NSEI)
         if symbol in ["^NSEI", "GC=F"]:
             yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "4h": "1h", "1d": "1d"}
             yf_tf = yf_tf_map.get(timeframe, "5m")
@@ -58,27 +57,21 @@ def fetch_candles(symbol, timeframe, limit=100):
             df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
             df = df.tail(limit).copy()
             return df
-
-        # Route 2: Binance for Crypto Markets
         else:
             ohlcv = binance_exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             return df
-            
     except Exception as e:
         print(f"Error fetching data for {symbol} on {timeframe}: {e}")
         return None
 
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message):
-    """Enforces state constraints to prevent repetitive alert spamming."""
     global alert_state_cache
     if alert_state_cache.get(alert_key) == current_timestamp:
         return
         
     alert_state_cache[alert_key] = current_timestamp
-    
-    # Clean display mapping for alerts
     display_names = {"^NSEI": "NIFTY 50", "GC=F": "GOLD FUTURES"}
     display_name = display_names.get(symbol, symbol)
     
@@ -92,9 +85,6 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     print(f"Sending Alert: {alert_key}")
     send_telegram_message(tg_message)
 
-# ==========================================
-# INDICATOR ENGINE
-# ==========================================
 def analyze_market(df, symbol):
     global active_zones
     if len(df) < TREND_LENGTH + 10:
@@ -112,7 +102,6 @@ def analyze_market(df, symbol):
     
     atr_val = df['atr'].iloc[-1] if not pd.isna(df['atr'].iloc[-1]) else df['close'].iloc[-1] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
-
     local_rsi = df['rsi'].iloc[-2]
 
     # --- Operator Candles Logic ---
@@ -136,9 +125,9 @@ def analyze_market(df, symbol):
                      (red_move_pct >= PCT_THRESH) and (30 < local_rsi < 50))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Buy structural configuration validated. RSI: {local_rsi:.2f}")
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Buy confirmation validated. RSI: {local_rsi:.2f}")
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell structural configuration validated. RSI: {local_rsi:.2f}")
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell confirmation validated. RSI: {local_rsi:.2f}")
 
     # --- Supply & Demand Box Generation ---
     idx = -(SWING_LENGTH + 2)
@@ -193,12 +182,11 @@ def analyze_market(df, symbol):
 # RUNTIME LOOP
 # ==========================================
 print(f"Unified Scanner Matrix Online for {SYMBOLS}")
-send_telegram_message("🚀 *Multi-Asset Exchange Scanner Online* 🚀\nMonitoring setups for `ETH`, `BTC`, `GOLD`, and `NIFTY 50` cross-timeframe models.")
+send_telegram_message("🚀 *Multi-Asset Spot Scanner Online* 🚀\nMonitoring setups safely globally across all intervals.")
 
 while True:
     try:
         for symbol in SYMBOLS:
-            # Skip checking Nifty entirely if weekends hit to keep processes clean
             if symbol == "^NSEI":
                 current_utc_day = time.gmtime().tm_wday
                 if current_utc_day >= 5:
