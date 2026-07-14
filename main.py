@@ -8,20 +8,19 @@ import requests
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-SYMBOL = "ETH/USDT"  # Tracked asset matching your chart
+SYMBOL = "ETH/USDT" 
 TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  # 0.5%
 SWING_LENGTH = 10
-BOX_WIDTH = 2.5        # Replicates the Pine Script 'Supply/Demand Box Width' multiplier
+BOX_WIDTH = 2.5        
 
 # 🔴 TELEGRAM CREDENTIALS
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
 # Global data stores for zone structures
-# Format: {"3m": [{"top": x, "bottom": y, "type": "demand"}, ...]}
 active_zones = {tf: [] for tf in TIMEFRAMES}
 alert_state_cache = {}
 
@@ -75,9 +74,9 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     send_telegram_message(tg_message)
 
 # ==========================================
-# INDICATOR ENGINE WITH DYNAMIC BOX MATCHING
+# INDICATOR ENGINE WITH LOCAL TIME RSI
 # ==========================================
-def analyze_market(df, df_15m=None):
+def analyze_market(df):
     global active_zones
     if len(df) < TREND_LENGTH + 10:
         return
@@ -98,12 +97,9 @@ def analyze_market(df, df_15m=None):
     atr_val = df['atr'].iloc[-1] if not pd.isna(df['atr'].iloc[-1]) else df['close'].iloc[-1] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
 
-    # --- 2. Multi-Timeframe 15m RSI Logic ---
-    if df_15m is not None and not df_15m.empty:
-        df_15m['rsi'] = ta.rsi(df_15m['close'], length=RSI_LENGTH)
-        rsi_15m = df_15m['rsi'].iloc[-1]
-    else:
-        rsi_15m = df['rsi'].iloc[-2]
+    # --- 2. Local Timeframe RSI Valuation ---
+    # Using the rsi value from the active processing timeframe [-2] (the most recently closed candle)
+    local_rsi = df['rsi'].iloc[-2]
 
     # --- 3. Operator Candles Logic ---
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
@@ -114,8 +110,9 @@ def analyze_market(df, df_15m=None):
     green_move_pct = (close_curr - low_curr) / low_curr if low_curr != 0 else 0
     is_engulfing_bull = (open_curr <= close_prev) and (close_curr > open_prev)
     
+    # Matches the candle timeframe with its own respective RSI constraints
     bull_reversal = (is_prev_red and is_curr_green and is_engulfing_bull and 
-                     (green_move_pct >= PCT_THRESH) and (50 < rsi_15m < 70))
+                     (green_move_pct >= PCT_THRESH) and (50 < local_rsi < 70))
 
     is_prev_green = close_prev > open_prev
     is_curr_red = close_curr < open_curr
@@ -123,12 +120,12 @@ def analyze_market(df, df_15m=None):
     is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
     
     bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
-                     (red_move_pct >= PCT_THRESH) and (30 < rsi_15m < 50))
+                     (red_move_pct >= PCT_THRESH) and (30 < local_rsi < 50))
 
     if bull_reversal:
-        process_alert(f"{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", SYMBOL, tf, "Institutional buying footprint established with 15m RSI verification.")
+        process_alert(f"{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", SYMBOL, tf, f"Institutional buy setup matched using native `{tf}` RSI ({local_rsi:.2f}).")
     if bear_reversal:
-        process_alert(f"{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", SYMBOL, tf, "Institutional selling footprint established with 15m RSI verification.")
+        process_alert(f"{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", SYMBOL, tf, f"Institutional sell setup matched using native `{tf}` RSI ({local_rsi:.2f}).")
 
     # --- 4. Supply & Demand Box Generation ---
     idx = -(SWING_LENGTH + 2)
@@ -147,7 +144,6 @@ def analyze_market(df, df_15m=None):
     if is_swing_high:
         top_edge = df['high'].iloc[idx]
         bottom_edge = top_edge - atr_buffer
-        # Prevent overlapping duplicate zone tracking entries
         if not any(abs(z['top'] - top_edge) < atr_buffer for z in active_zones[tf]):
             active_zones[tf].append({"top": top_edge, "bottom": bottom_edge, "type": "supply"})
             
@@ -164,21 +160,16 @@ def analyze_market(df, df_15m=None):
         invalidated = False
         
         if zone['type'] == "demand":
-            # Re-test match condition: Candle dips low enough to enter the box area
             if live_low <= zone['top'] and live_high >= zone['bottom']:
                 process_alert(f"{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", SYMBOL, tf, 
                               f"Price retraced down into historical structural support window: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`")
-            
-            # Break of Structure (BOS) mitigation check
             if live_close < zone['bottom']:
                 invalidated = True
                 
         elif zone['type'] == "supply":
-            # Re-test match condition: Candle spikes high enough to enter the box area
             if live_high >= zone['bottom'] and live_low <= zone['top']:
                 process_alert(f"{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", SYMBOL, tf, 
                               f"Price pushed up into historical structural resistance window: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`")
-            
             if live_close > zone['top']:
                 invalidated = True
 
@@ -191,16 +182,16 @@ def analyze_market(df, df_15m=None):
 # CORE LOOP ENGINE
 # ==========================================
 print(f"Scanning engine initializing for {SYMBOL}...")
-send_telegram_message(f"✅ *Scanner Matrix Live* for `{SYMBOL}`. Actively tracking OCs and Zone Touches across all timeframes.")
+send_telegram_message(f"✅ *Scanner Matrix Live* for `{SYMBOL}`. Actively tracking OCs and Zone Touches matching native RSI values on all timeframes.")
 
 while True:
     try:
-        df_15m = fetch_candles(SYMBOL, "15m", limit=100)
+        # Loop over each timeframe seamlessly without dependencies on a shared 15m structural request
         for tf in TIMEFRAMES:
             df = fetch_candles(SYMBOL, tf, limit=100)
             if df is not None:
                 df.timeframe_meta = tf
-                analyze_market(df, df_15m)
+                analyze_market(df)
         time.sleep(10)
     except Exception as e:
         print(f"Loop runtime exception encounter: {e}")
