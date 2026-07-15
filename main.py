@@ -18,16 +18,20 @@ def home():
     return "Bot Matrix Status: ONLINE & SCANNING 24/7", 200
 
 def run_web_server():
-    # Render automatically inputs a PORT environment variable
     port = int(os.environ.get("PORT", 10000))
-    # Binds the server to open ports to satisfy Render's requirements check
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-SYMBOLS = ["ETH-USD", "BTC-USD", "GC=F", "^NSEI"]
-TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
+# ⚡ Updated list with all requested Indian stocks (Yahoo Finance ticker formatting)
+SYMBOLS = [
+    "ETH-USD", "BTC-USD", "GC=F", "^NSEI",
+    "CUB.NS", "ASHOKLEY.NS", "MOTHERSON.NS", "SAIL.NS", 
+    "GAIL.NS", "ITCHOTELS.NS", "M&MFIN.NS", "IOC.NS", 
+    "CANBK.NS", "ADANIPOWER.NS", "BPCL.NS", "VMM.NS", "HUDCO.NS"
+]
+TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
@@ -73,7 +77,27 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
         return
         
     alert_state_cache[alert_key] = current_timestamp
-    display_names = {"^NSEI": "NIFTY 50", "GC=F": "GOLD FUTURES", "BTC-USD": "BTC/USD", "ETH-USD": "ETH/USD"}
+    
+    # ⚡ Added custom display mappings for all Indian stocks to keep Telegram alerts clean
+    display_names = {
+        "^NSEI": "NIFTY 50", 
+        "GC=F": "GOLD FUTURES", 
+        "BTC-USD": "BTC/USD", 
+        "ETH-USD": "ETH/USD",
+        "CUB.NS": "CITY UNION BANK",
+        "ASHOKLEY.NS": "ASHOK LEYLAND",
+        "MOTHERSON.NS": "MOTHERSON SUMI",
+        "SAIL.NS": "SAIL",
+        "GAIL.NS": "GAIL",
+        "ITCHOTELS.NS": "ITC HOTELS",
+        "M&MFIN.NS": "M&M FINANCIAL",
+        "IOC.NS": "IOC",
+        "CANBK.NS": "CANARA BANK",
+        "ADANIPOWER.NS": "ADANI POWER",
+        "BPCL.NS": "BPCL",
+        "VMM.NS": "VMM",
+        "HUDCO.NS": "HUDCO"
+    }
     display_name = display_names.get(symbol, symbol)
     
     tg_message = (
@@ -178,12 +202,13 @@ def analyze_market(df, symbol):
 def core_market_scanner_loop():
     """Main algorithmic loop running safely inside an independent execution thread."""
     print(f"Unified Scanner Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Multi-Asset Free-Tier Engine Online* 🚀\nHeartbeat web bindings enabled. Monitoring markets seamlessly.")
+    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring custom layout tickers 24/7.")
     
     while True:
         try:
             for symbol in SYMBOLS:
-                if symbol == "^NSEI":
+                # ⚡ Skip scanning Indian markets if it's the weekend (Saturday or Sunday)
+                if symbol == "^NSEI" or symbol.endswith(".NS"):
                     if time.gmtime().tm_wday >= 5:
                         continue
 
@@ -201,9 +226,6 @@ def core_market_scanner_loop():
 # EXECUTION LIFECYCLE ROUTING
 # ==========================================
 if __name__ == "__main__":
-    # 1. Fire up the data engine loop on a side thread
     scanner_thread = threading.Thread(target=core_market_scanner_loop, daemon=True)
     scanner_thread.start()
-    
-    # 2. Keep the Flask web server running on the main thread to prevent Render port crashes
     run_web_server()
