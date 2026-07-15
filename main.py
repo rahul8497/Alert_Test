@@ -1,34 +1,47 @@
 import time
+import threading
+import os
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import requests
 import yfinance as yf
+from flask import Flask
+
+# ==========================================
+# 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER FREE TIER
+# ==========================================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot Matrix Status: ONLINE & SCANNING 24/7", 200
+
+def run_web_server():
+    # Render automatically inputs a PORT environment variable
+    port = int(os.environ.get("PORT", 10000))
+    # Binds the server to open ports to satisfy Render's requirements check
+    app.run(host='0.0.0.0', port=port)
 
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# All assets mapped to clean Yahoo Finance Tickers to bypass Binance geo-blocks completely
-# Crypto: ETH-USD, BTC-USD | Commodities: GC=F (Gold) | Indices: ^NSEI (Nifty 50)
-SYMBOLS = ["ETH-USD", "BTC-USD"]
+SYMBOLS = ["ETH-USD", "BTC-USD", "GC=F", "^NSEI"]
 TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
-PCT_THRESH = 0.5 / 100  # 0.5% threshold filter
+PCT_THRESH = 0.5 / 100  
 SWING_LENGTH = 10
 BOX_WIDTH = 2.5        
 
-# 🔴 TELEGRAM CREDENTIALS
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
-# Global data stores for zone structures mapped by asset and timeframe
 active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in SYMBOLS}
 alert_state_cache = {}
 
 def send_telegram_message(message):
-    """Transmits real-time alert updates directly to Telegram."""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
@@ -37,51 +50,30 @@ def send_telegram_message(message):
         print(f"Network error sending Telegram notification: {e}")
 
 def fetch_candles(symbol, timeframe, limit=100):
-    """Fetches clean multi-timeframe market matrices through Yahoo Finance API pipes."""
     try:
-        # Convert our operational timeframes to yfinance interval specifications
         yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "4h": "1h", "1d": "1d"}
         yf_tf = yf_tf_map.get(timeframe, "5m")
-        
-        # Determine data padding history requirements per request layer
         period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "5d", "1h": "7d", "1d": "3mo"}
-        yf_period = period_map.get(yf_tf, "5d")
         
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period=yf_period, interval=yf_tf)
+        history = ticker.history(period=period_map.get(yf_tf, "5d"), interval=yf_tf)
         
         if history.empty:
             return None
             
         df = history.reset_index()
-        # Standardize column naming rules globally across data models
-        df.rename(columns={
-            "Datetime": "timestamp", "Date": "timestamp", 
-            "Open": "open", "High": "high", "Low": "low", "Close": "close", 
-            "Volume": "volume"
-        }, inplace=True)
-        
-        df = df.tail(limit).copy()
-        return df
+        df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        return df.tail(limit).copy()
     except Exception as e:
-        print(f"Error fetching data for {symbol} on {timeframe}: {e}")
         return None
 
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message):
-    """Enforces state constraints to prevent repetitive alert spamming."""
     global alert_state_cache
     if alert_state_cache.get(alert_key) == current_timestamp:
         return
         
     alert_state_cache[alert_key] = current_timestamp
-    
-    # Clean up asset names for Telegram notifications
-    display_names = {
-        "^NSEI": "NIFTY 50", 
-        "GC=F": "GOLD FUTURES",
-        "BTC-USD": "BTC/USD",
-        "ETH-USD": "ETH/USD"
-    }
+    display_names = {"^NSEI": "NIFTY 50", "GC=F": "GOLD FUTURES", "BTC-USD": "BTC/USD", "ETH-USD": "ETH/USD"}
     display_name = display_names.get(symbol, symbol)
     
     tg_message = (
@@ -91,12 +83,8 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
         f"• *Signal:* `{alert_type}`\n"
         f"• *Context:* {message}"
     )
-    print(f"Sending Alert: {alert_key}")
     send_telegram_message(tg_message)
 
-# ==========================================
-# INDICATOR ENGINE
-# ==========================================
 def analyze_market(df, symbol):
     global active_zones
     if len(df) < TREND_LENGTH + 10:
@@ -116,7 +104,6 @@ def analyze_market(df, symbol):
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
     local_rsi = df['rsi'].iloc[-2]
 
-    # --- Operator Candles Logic ---
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
 
@@ -141,7 +128,6 @@ def analyze_market(df, symbol):
     if bear_reversal:
         process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell confirmation validated. RSI: {local_rsi:.2f}")
 
-    # --- Supply & Demand Box Generation ---
     idx = -(SWING_LENGTH + 2)
     is_swing_high, is_swing_low = True, True
     
@@ -166,7 +152,6 @@ def analyze_market(df, symbol):
         if not any(abs(z['bottom'] - bottom_edge) < atr_buffer for z in active_zones[symbol][tf]):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
-    # --- Live Candle Zone Touches Check ---
     remaining_zones = []
     for zone in active_zones[symbol][tf]:
         invalidated = False
@@ -190,28 +175,35 @@ def analyze_market(df, symbol):
             
     active_zones[symbol][tf] = remaining_zones
 
-# ==========================================
-# RUNTIME LOOP
-# ==========================================
-print(f"Unified Global Cloud Scanner Online for {SYMBOLS}")
-send_telegram_message("🚀 *Global Cloud Multi-Asset Scanner Online* 🚀\nAll asset filters running completely open without geo-blocking paths.")
+def core_market_scanner_loop():
+    """Main algorithmic loop running safely inside an independent execution thread."""
+    print(f"Unified Scanner Matrix Processing Engine Online...")
+    send_telegram_message("🚀 *Multi-Asset Free-Tier Engine Online* 🚀\nHeartbeat web bindings enabled. Monitoring markets seamlessly.")
+    
+    while True:
+        try:
+            for symbol in SYMBOLS:
+                if symbol == "^NSEI":
+                    if time.gmtime().tm_wday >= 5:
+                        continue
 
-while True:
-    try:
-        for symbol in SYMBOLS:
-            # Skip checking Nifty entirely if traditional stock market closures hit
-            if symbol == "^NSEI":
-                current_utc_day = time.gmtime().tm_wday
-                if current_utc_day >= 5:
-                    continue
+                for tf in TIMEFRAMES:
+                    df = fetch_candles(symbol, tf)
+                    if df is not None and not df.empty:
+                        df.timeframe_meta = tf
+                        analyze_market(df, symbol)
+                        
+            time.sleep(15)
+        except Exception as e:
+            time.sleep(5)
 
-            for tf in TIMEFRAMES:
-                df = fetch_candles(symbol, tf, limit=100)
-                if df is not None and not df.empty:
-                    df.timeframe_meta = tf
-                    analyze_market(df, symbol)
-                    
-        time.sleep(15)
-    except Exception as e:
-        print(f"Loop runtime tracking anomaly: {e}")
-        time.sleep(5)
+# ==========================================
+# EXECUTION LIFECYCLE ROUTING
+# ==========================================
+if __name__ == "__main__":
+    # 1. Fire up the data engine loop on a side thread
+    scanner_thread = threading.Thread(target=core_market_scanner_loop, daemon=True)
+    scanner_thread.start()
+    
+    # 2. Keep the Flask web server running on the main thread to prevent Render port crashes
+    run_web_server()
