@@ -1,6 +1,7 @@
 import time
 import threading
 import os
+import datetime
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -86,7 +87,6 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     }
     display_name = display_names.get(symbol, symbol)
     
-    # Clean price formatting
     price_str = f"{price:.2f}" if isinstance(price, (int, float)) else "N/A"
     
     tg_message = (
@@ -192,14 +192,22 @@ def analyze_market(df, symbol):
 def core_market_scanner_loop():
     """Main algorithmic loop running safely inside an independent execution thread."""
     print(f"Unified Scanner Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring all custom layout tickers with live price tracking.")
+    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring all tickers with live price tracking and live IST hour protection.")
     
     while True:
         try:
+            # Calculate current Indian Standard Time (IST) directly from UTC offset (+5:30)
+            utc_now = datetime.datetime.utcnow()
+            ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
+            
+            current_hour_min = ist_now.hour * 100 + ist_now.minute
+            is_weekend = ist_now.weekday() >= 5
+            is_live_market_hours = (915 <= current_hour_min <= 1530)
+
             for symbol in SYMBOLS:
-                # Skip Indian markets during the weekend
+                # Restrict Indian assets to live market hours and weekdays only
                 if symbol == "^NSEI" or symbol.endswith(".NS"):
-                    if time.gmtime().tm_wday >= 5:
+                    if is_weekend or not is_live_market_hours:
                         continue
 
                 for tf in TIMEFRAMES:
