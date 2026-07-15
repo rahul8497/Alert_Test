@@ -24,7 +24,6 @@ def run_web_server():
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# ⚡ Updated list with all requested Indian stocks (Yahoo Finance ticker formatting)
 SYMBOLS = [
     "ETH-USD", "BTC-USD", "GC=F", "^NSEI",
     "CUB.NS", "ASHOKLEY.NS", "MOTHERSON.NS", "SAIL.NS", 
@@ -71,38 +70,29 @@ def fetch_candles(symbol, timeframe, limit=100):
     except Exception as e:
         return None
 
-def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message):
+def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
     if alert_state_cache.get(alert_key) == current_timestamp:
         return
         
     alert_state_cache[alert_key] = current_timestamp
     
-    # ⚡ Added custom display mappings for all Indian stocks to keep Telegram alerts clean
     display_names = {
-        "^NSEI": "NIFTY 50", 
-        "GC=F": "GOLD FUTURES", 
-        "BTC-USD": "BTC/USD", 
-        "ETH-USD": "ETH/USD",
-        "CUB.NS": "CITY UNION BANK",
-        "ASHOKLEY.NS": "ASHOK LEYLAND",
-        "MOTHERSON.NS": "MOTHERSON SUMI",
-        "SAIL.NS": "SAIL",
-        "GAIL.NS": "GAIL",
-        "ITCHOTELS.NS": "ITC HOTELS",
-        "M&MFIN.NS": "M&M FINANCIAL",
-        "IOC.NS": "IOC",
-        "CANBK.NS": "CANARA BANK",
-        "ADANIPOWER.NS": "ADANI POWER",
-        "BPCL.NS": "BPCL",
-        "VMM.NS": "VMM",
-        "HUDCO.NS": "HUDCO"
+        "^NSEI": "NIFTY 50", "GC=F": "GOLD FUTURES", "BTC-USD": "BTC/USD", "ETH-USD": "ETH/USD",
+        "CUB.NS": "CITY UNION BANK", "ASHOKLEY.NS": "ASHOK LEYLAND", "MOTHERSON.NS": "MOTHERSON SUMI",
+        "SAIL.NS": "SAIL", "GAIL.NS": "GAIL", "ITCHOTELS.NS": "ITC HOTELS", "M&MFIN.NS": "M&M FINANCIAL",
+        "IOC.NS": "IOC", "CANBK.NS": "CANARA BANK", "ADANIPOWER.NS": "ADANI POWER", "BPCL.NS": "BPCL",
+        "VMM.NS": "VMM", "HUDCO.NS": "HUDCO"
     }
     display_name = display_names.get(symbol, symbol)
+    
+    # Clean price formatting
+    price_str = f"{price:.2f}" if isinstance(price, (int, float)) else "N/A"
     
     tg_message = (
         f"🚨 *[SIGNAL MATCHED]* 🚨\n\n"
         f"• *Asset:* `{display_name}`\n"
+        f"• *Price:* `{price_str}`\n"
         f"• *Timeframe:* `{timeframe.upper()}`\n"
         f"• *Signal:* `{alert_type}`\n"
         f"• *Context:* {message}"
@@ -148,9 +138,9 @@ def analyze_market(df, symbol):
                      (red_move_pct >= PCT_THRESH) and (30 < local_rsi < 50))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Buy confirmation validated. RSI: {local_rsi:.2f}")
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Buy confirmation validated. RSI: {local_rsi:.2f}", live_close)
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell confirmation validated. RSI: {local_rsi:.2f}")
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Sell confirmation validated. RSI: {local_rsi:.2f}", live_close)
 
     idx = -(SWING_LENGTH + 2)
     is_swing_high, is_swing_low = True, True
@@ -183,14 +173,14 @@ def analyze_market(df, symbol):
         if zone['type'] == "demand":
             if live_low <= zone['top'] and live_high >= zone['bottom']:
                 process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", symbol, tf, 
-                              f"Price retraced into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`")
+                              f"Price retraced into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_close)
             if live_close < zone['bottom']:
                 invalidated = True
                 
         elif zone['type'] == "supply":
             if live_high >= zone['bottom'] and live_low <= zone['top']:
                 process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, 
-                              f"Price pushed into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`")
+                              f"Price pushed into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_close)
             if live_close > zone['top']:
                 invalidated = True
 
@@ -202,12 +192,12 @@ def analyze_market(df, symbol):
 def core_market_scanner_loop():
     """Main algorithmic loop running safely inside an independent execution thread."""
     print(f"Unified Scanner Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring custom layout tickers 24/7.")
+    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring all custom layout tickers with live price tracking.")
     
     while True:
         try:
             for symbol in SYMBOLS:
-                # ⚡ Skip scanning Indian markets if it's the weekend (Saturday or Sunday)
+                # Skip Indian markets during the weekend
                 if symbol == "^NSEI" or symbol.endswith(".NS"):
                     if time.gmtime().tm_wday >= 5:
                         continue
