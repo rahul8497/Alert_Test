@@ -192,12 +192,12 @@ def analyze_market(df, symbol):
 def core_market_scanner_loop():
     """Main algorithmic loop running safely inside an independent execution thread."""
     print(f"Unified Scanner Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring all tickers with live price tracking and live IST hour protection.")
+    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring all tickers with live price tracking and clean log filters.")
     
     while True:
         try:
-            # Calculate current Indian Standard Time (IST) directly from UTC offset (+5:30)
-            utc_now = datetime.datetime.utcnow()
+            # Clean, modern approach using timezone-aware datetime objects to stop deprecation warnings
+            utc_now = datetime.datetime.now(datetime.timezone.utc)
             ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
             
             current_hour_min = ist_now.hour * 100 + ist_now.minute
