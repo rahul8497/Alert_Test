@@ -16,14 +16,14 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & LIVE SCANNING FOR ALL ASSETS 24/7", 200
+    return "Bot Matrix Status: ONLINE & 4H MATH RESAMPLER ACTIVE 24/7", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# CONFIGURATION & PARAMETERS (CORRECTED & ALIGNED)
+# CONFIGURATION & PARAMETERS
 # ==========================================
 SYMBOLS = [
     "ETH-USD", "BTC-USD", "GC=F", "^NSEI",
@@ -31,14 +31,13 @@ SYMBOLS = [
     "GAIL.NS", "ITCHOTELS.NS", "M&MFIN.NS", "IOC.NS", 
     "CANBK.NS", "ADANIPOWER.NS", "BPCL.NS", "VMM.NS", "HUDCO.NS"
 ]
-# Retaining your target timeframes (Note: 4h can experience yfinance data offsets)
 TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  
 SWING_LENGTH = 10
-BOX_WIDTH = 2.0  # Tightened to 2.0 to match TradingView UI box boundaries perfectly
+BOX_WIDTH = 2.0  # Tightened mapping to match TradingView UI box boundaries
 
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
@@ -58,22 +57,69 @@ def send_telegram_message(message):
         print(f"Network error sending Telegram notification: {e}")
 
 # ==========================================
-# YFINANCE GLOBAL DATA PIPELINE
+# MATHEMATICAL RESAMPLING ENGINE FOR 4H ALIGNMENT
+# ==========================================
+def resample_to_4h(df_1h):
+    """
+    Takes a standard 1-Hour DataFrame and applies custom resampling math
+    to bundle rows into highly accurate, TradingView-aligned 4-Hour blocks.
+    """
+    try:
+        if df_1h is None or df_1h.empty:
+            return None
+            
+        # Ensure timestamp is set as the active working index
+        df_1h = df_1h.set_index('timestamp')
+        
+        # Apply OHLCV Resampling rules math
+        resample_rules = {
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }
+        
+        # '4h' label defines the window, 'closed="left"' aligns the calculation anchor
+        df_4h = df_1h.resample('4h', closed='left', label='left').agg(resample_rules)
+        
+        # Drop empty intervals created outside trading session hours
+        df_4h = df_4h.dropna(subset=['close']).reset_index()
+        return df_4h
+    except Exception as e:
+        print(f"Mathematical resampling error: {e}")
+        return None
+
+# ==========================================
+# DATA FETCHING PIPELINE
 # ==========================================
 def fetch_candles(symbol, timeframe, limit=100):
     try:
-        yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "4h": "1h", "1d": "1d"}
-        yf_tf = yf_tf_map.get(timeframe, "5m")
-        period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "5d", "1h": "7d", "1d": "3mo"}
+        # If the tracking sweep requests a 4H interval, we fetch raw 1H data to feed our mathematical resampler
+        target_tf = "60m" if timeframe == "4h" else timeframe
+        
+        yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
+        yf_tf = yf_tf_map.get(target_tf, "5m")
+        
+        # Expand 4h lookback buffer so the math has plenty of rows to group together
+        period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "7d", "1d": "3mo"}
+        fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
         
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period=period_map.get(yf_tf, "5d"), interval=yf_tf)
+        history = ticker.history(period=fetch_period, interval=yf_tf)
         
         if history.empty:
             return None
             
         df = history.reset_index()
         df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        
+        # Route through the resampling engine if evaluating a 4-Hour setup
+        if timeframe == "4h":
+            df = resample_to_4h(df)
+            if df is None:
+                return None
+                
         return df.tail(limit).copy()
     except Exception as e:
         return None
@@ -83,12 +129,10 @@ def fetch_candles(symbol, timeframe, limit=100):
 # ==========================================
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
-    
-    # 🔴 LIVE PIPELINE KEY: Tracks combination of signal, timeframe, and specific candle timestamp
     live_tracking_key = f"{alert_key}_{current_timestamp}"
     
     if alert_state_cache.get(live_tracking_key) == True:
-        return  # Prevents spamming alerts within the exact same candle period
+        return  
         
     alert_state_cache[live_tracking_key] = True
     
@@ -119,8 +163,7 @@ def analyze_market(df, symbol):
     
     tf = df.timeframe_meta
     
-    # 🔴 CHANGED TO LIVE CANDLE EVALUATION TO MATCH TRADINGVIEW Real-Time Ticks
-    # Index [-1] targeting the active forming candle, Index [-2] targeting the previous closed candle
+    # Live candle analysis using real-time `.iloc[-1]` indexing mapping
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-1], df['open'].iloc[-1], df['low'].iloc[-1], df['high'].iloc[-1]
     close_prev, open_prev = df['close'].iloc[-2], df['open'].iloc[-2]
     target_candle_time = str(df['timestamp'].iloc[-1])
@@ -130,36 +173,32 @@ def analyze_market(df, symbol):
     
     atr_val = df['atr'].iloc[-1] if not pd.isna(df['atr'].iloc[-1]) else df['close'].iloc[-1] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
-    
-    # Read current live forming candle RSI
     local_rsi = df['rsi'].iloc[-1]
 
-    # Structural calculation parameters for Bullish Operator Candles
+    # Bullish Operator Candle Logic Math
     is_prev_red = close_prev < open_prev
     is_curr_green = close_curr > open_curr
     green_move_pct = (close_curr - low_curr) / low_curr if low_curr != 0 else 0
     is_engulfing_bull = (open_curr <= close_prev) and (close_curr > open_prev)
     
-    # 🔓 WIDENED RSI ACCEPTANCE GATE (35 < RSI < 75) so strong momentum trends don't filter out signals
     bull_reversal = (is_prev_red and is_curr_green and is_engulfing_bull and 
                      (green_move_pct >= PCT_THRESH) and (35 < local_rsi < 75))
 
-    # Structural calculation parameters for Bearish Operator Candles
+    # Bearish Operator Candle Logic Math
     is_prev_green = close_prev > open_prev
     is_curr_red = close_curr < open_curr
     red_move_pct = (high_curr - close_curr) / high_curr if high_curr != 0 else 0
     is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
     
-    # 🔓 WIDENED RSI ACCEPTANCE GATE (25 < RSI < 65) to capture extreme high trend reversals smoothly
     bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Live Bull structural engulfing break detected. RSI: {local_rsi:.2f}", close_curr)
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Live Bull engulfing pattern validated. RSI: {local_rsi:.2f}", close_curr)
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Live Bear structural engulfing break detected. RSI: {local_rsi:.2f}", close_curr)
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Live Bear engulfing pattern validated. RSI: {local_rsi:.2f}", close_curr)
 
-    # Support / Resistance Structural Calculation Matrix
+    # Zone calculation arrays
     idx = -(SWING_LENGTH + 2)
     is_swing_high, is_swing_low = True, True
     
@@ -189,10 +228,9 @@ def analyze_market(df, symbol):
         invalidated = False
         
         if zone['type'] == "demand":
-            # Evaluates the live high and low values directly against active support zones
             if low_curr <= zone['top'] and high_curr >= zone['bottom']:
                 process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", symbol, tf, 
-                              f"Live price retraced into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", close_curr)
+                              f"Live price pulled into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", close_curr)
             if close_curr < zone['bottom']:
                 invalidated = True
                 
@@ -209,11 +247,11 @@ def analyze_market(df, symbol):
     active_zones[symbol][tf] = remaining_zones
 
 # ==========================================
-# EXECUTION LIFECYCLE ROUTING
+# RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"Unified Scanner Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nMonitoring all 17 assets dynamically via real-time candle evaluation filters.")
+    print(f"Resampled Multi-Asset Matrix Processing Engine Online...")
+    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nResampler math enabled. 4H chart synchronization active.")
     
     while True:
         try:
@@ -225,7 +263,6 @@ def core_market_scanner_loop():
             is_live_market_hours = (915 <= current_hour_min <= 1530)
 
             for symbol in SYMBOLS:
-                # Restrict Indian stocks and Nifty Index tracking explicitly to official trading hours
                 if symbol == "^NSEI" or symbol.endswith(".NS"):
                     if is_weekend or not is_live_market_hours:
                         continue
@@ -236,7 +273,7 @@ def core_market_scanner_loop():
                         df.timeframe_meta = tf
                         analyze_market(df, symbol)
                         
-            time.sleep(15)  # Re-scans all asset streams every 15 seconds
+            time.sleep(15)
         except Exception as e:
             time.sleep(5)
 
