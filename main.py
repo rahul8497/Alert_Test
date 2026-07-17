@@ -16,7 +16,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & 4H MATH RESAMPLER ACTIVE 24/7", 200
+    return "Bot Matrix Status: ONLINE & 4H MATH RESAMPLER ACTIVE 24/7 (Macro Only)", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -25,12 +25,8 @@ def run_web_server():
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-SYMBOLS = [
-    "ETH-USD", "BTC-USD", "GC=F", "^NSEI",
-    "CUB.NS", "ASHOKLEY.NS", "MOTHERSON.NS", "SAIL.NS", 
-    "GAIL.NS", "ITCHOTELS.NS", "M&MFIN.NS", "IOC.NS", 
-    "CANBK.NS", "ADANIPOWER.NS", "BPCL.NS", "VMM.NS", "HUDCO.NS"
-]
+# Strictly tracking Cryptocurrencies and Commodities (24/7 Global Macro Markets)
+SYMBOLS = ["BTC-USD", "ETH-USD", "GC=F"]
 TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
@@ -137,17 +133,21 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     alert_state_cache[live_tracking_key] = True
     
     display_names = {
-        "^NSEI": "NIFTY 50", "GC=F": "GOLD FUTURES", "BTC-USD": "BTC/USD", "ETH-USD": "ETH/USD",
-        "CUB.NS": "CITY UNION BANK", "ASHOKLEY.NS": "ASHOK LEYLAND", "MOTHERSON.NS": "MOTHERSON SUMI",
-        "SAIL.NS": "SAIL", "GAIL.NS": "GAIL", "ITCHOTELS.NS": "ITC HOTELS", "M&MFIN.NS": "M&M FINANCIAL",
-        "IOC.NS": "IOC", "CANBK.NS": "CANARA BANK", "ADANIPOWER.NS": "ADANI POWER", "BPCL.NS": "BPCL",
-        "VMM.NS": "VMM", "HUDCO.NS": "HUDCO"
+        "BTC-USD": "BITCOIN (BTC/USD)", 
+        "ETH-USD": "ETHEREUM (ETH/USD)", 
+        "GC=F": "GOLD FUTURES"
     }
     display_name = display_names.get(symbol, symbol)
-    price_str = f"{price:.2f}" if isinstance(price, (int, float)) else "N/A"
+    price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
+    
+    # Dynamic header color adjustment for visually distinguishing Buy/Sell directions
+    if "Support" in alert_type or "Bull" in alert_type:
+        header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢"
+    else:
+        header = "🔴 *[LIVE SELL SIGNAL MATCHED]* 🔴"
     
     tg_message = (
-        f"🚨 *[LIVE SIGNAL MATCHED]* 🚨\n\n"
+        f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
         f"• *Price:* `{price_str}`\n"
         f"• *Timeframe:* `{timeframe.upper()}`\n"
@@ -250,23 +250,13 @@ def analyze_market(df, symbol):
 # RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"Resampled Multi-Asset Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Multi-Asset Watchlist Engine Online* 🚀\nResampler math enabled. 4H chart synchronization active.")
+    print(f"Resampled Macro Asset Matrix Processing Engine Online...")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold 24/7. Green/Red visual alert system loaded.")
     
     while True:
         try:
-            utc_now = datetime.datetime.now(datetime.timezone.utc)
-            ist_now = utc_now + datetime.timedelta(hours=5, minutes=30)
-            
-            current_hour_min = ist_now.hour * 100 + ist_now.minute
-            is_weekend = ist_now.weekday() >= 5
-            is_live_market_hours = (915 <= current_hour_min <= 1530)
-
+            # Cryptocurrencies trade 24/7/365, so we run the parsing engines directly without session checks
             for symbol in SYMBOLS:
-                if symbol == "^NSEI" or symbol.endswith(".NS"):
-                    if is_weekend or not is_live_market_hours:
-                        continue
-
                 for tf in TIMEFRAMES:
                     df = fetch_candles(symbol, tf)
                     if df is not None and not df.empty:
