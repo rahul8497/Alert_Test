@@ -10,13 +10,24 @@ import yfinance as yf
 from flask import Flask
 
 # ==========================================
+# 🔧 LEGACY COMPATIBILITY PATCH FOR PANDAS-TA
+# ==========================================
+# Restores old type attributes that pandas-ta requires on modern python environments
+if not hasattr(np, 'int'):
+    np.int = int
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'bool'):
+    np.bool = bool
+
+# ==========================================
 # 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER FREE TIER
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & 4H MATH RESAMPLER ACTIVE 24/7 (Macro Only)", 200
+    return "Bot Matrix Status: ONLINE & NO-REPAINT ENGINE ACTIVE 24/7 (Macro Only)", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -121,10 +132,12 @@ def fetch_candles(symbol, timeframe, limit=100):
         return None
 
 # ==========================================
-# CORE STRATEGY ANALYSIS MATRIX (LIVE ALIGNED)
+# CORE STRATEGY ANALYSIS MATRIX (NO-REPAINT MODE)
 # ==========================================
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
+    
+    # Secure cache matching by tracking the un-paintable unique closed bar index
     live_tracking_key = f"{alert_key}_{current_timestamp}"
     
     if alert_state_cache.get(live_tracking_key) == True:
@@ -163,17 +176,26 @@ def analyze_market(df, symbol):
     
     tf = df.timeframe_meta
     
-    # Live candle analysis using real-time `.iloc[-1]` indexing mapping
-    close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-1], df['open'].iloc[-1], df['low'].iloc[-1], df['high'].iloc[-1]
-    close_prev, open_prev = df['close'].iloc[-2], df['open'].iloc[-2]
-    target_candle_time = str(df['timestamp'].iloc[-1])
+    # ----------------------------------------------------
+    # 🛡️ NO-REPAINT SHIFT (.iloc[-2])
+    # ----------------------------------------------------
+    # We map candle attributes back by 1 block relative to history.
+    # iloc[-1] is skipped because it's flickering live. 
+    # iloc[-2] is verified and can never alter its data points.
+    close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
+    close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
+    
+    # Grab the current real-time close price execution to report accurately on dispatch
+    live_market_price = df['close'].iloc[-1]
+    target_candle_time = str(df['timestamp'].iloc[-2])
 
     df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
     
-    atr_val = df['atr'].iloc[-1] if not pd.isna(df['atr'].iloc[-1]) else df['close'].iloc[-1] * 0.002
+    # Evaluate calculations relative to our historical baseline index anchor
+    atr_val = df['atr'].iloc[-2] if not pd.isna(df['atr'].iloc[-2]) else df['close'].iloc[-2] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
-    local_rsi = df['rsi'].iloc[-1]
+    local_rsi = df['rsi'].iloc[-2]
 
     # Bullish Operator Candle Logic Math
     is_prev_red = close_prev < open_prev
@@ -194,12 +216,12 @@ def analyze_market(df, symbol):
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Live Bull engulfing pattern validated. RSI: {local_rsi:.2f}", close_curr)
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Confirmed Bull engulfing pattern validated on candle close. RSI: {local_rsi:.2f}", live_market_price)
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Live Bear engulfing pattern validated. RSI: {local_rsi:.2f}", close_curr)
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Confirmed Bear engulfing pattern validated on candle close. RSI: {local_rsi:.2f}", live_market_price)
 
-    # Zone calculation arrays
-    idx = -(SWING_LENGTH + 2)
+    # Zone calculation arrays shift safe boundary offsets
+    idx = -(SWING_LENGTH + 3)
     is_swing_high, is_swing_low = True, True
     
     for check_i in range(1, SWING_LENGTH + 1):
@@ -224,20 +246,21 @@ def analyze_market(df, symbol):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
     remaining_zones = []
+    # Loop over tracked coordinates relative to finalized block values
     for zone in active_zones[symbol][tf]:
         invalidated = False
         
         if zone['type'] == "demand":
             if low_curr <= zone['top'] and high_curr >= zone['bottom']:
                 process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", symbol, tf, 
-                              f"Live price pulled into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", close_curr)
+                              f"Confirmed price pulled into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
             if close_curr < zone['bottom']:
                 invalidated = True
                 
         elif zone['type'] == "supply":
             if high_curr >= zone['bottom'] and low_curr <= zone['top']:
                 process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, 
-                              f"Live price pushed into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", close_curr)
+                              f"Confirmed price pushed into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
             if close_curr > zone['top']:
                 invalidated = True
 
@@ -251,7 +274,7 @@ def analyze_market(df, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Resampled Macro Asset Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold 24/7. Green/Red visual alert system loaded.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold 24/7. TradingView No-Repaint configuration locked.")
     
     while True:
         try:
