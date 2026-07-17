@@ -12,7 +12,6 @@ from flask import Flask
 # ==========================================
 # 🔧 LEGACY COMPATIBILITY PATCH FOR PANDAS-TA
 # ==========================================
-# Restores old type attributes that pandas-ta requires on modern python environments
 if not hasattr(np, 'int'):
     np.int = int
 if not hasattr(np, 'float'):
@@ -27,7 +26,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & NO-REPAINT ENGINE ACTIVE 24/7 (Macro Only)", 200
+    return "Bot Matrix Status: ONLINE & NO-REPAINT GOLD SPOT ENGINE ACTIVE 24/7", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -36,15 +35,15 @@ def run_web_server():
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Strictly tracking Cryptocurrencies and Commodities (24/7 Global Macro Markets)
-SYMBOLS = ["BTC-USD", "ETH-USD", "GC=F"]
+# Swapped "GC=F" to "XAUUSD=X" to capture the physical Spot Market feed directly
+SYMBOLS = ["BTC-USD", "ETH-USD", "XAUUSD=X"]
 TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  
 SWING_LENGTH = 10
-BOX_WIDTH = 2.0  # Tightened mapping to match TradingView UI box boundaries
+BOX_WIDTH = 2.0  
 
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
@@ -67,18 +66,11 @@ def send_telegram_message(message):
 # MATHEMATICAL RESAMPLING ENGINE FOR 4H ALIGNMENT
 # ==========================================
 def resample_to_4h(df_1h):
-    """
-    Takes a standard 1-Hour DataFrame and applies custom resampling math
-    to bundle rows into highly accurate, TradingView-aligned 4-Hour blocks.
-    """
     try:
         if df_1h is None or df_1h.empty:
             return None
             
-        # Ensure timestamp is set as the active working index
         df_1h = df_1h.set_index('timestamp')
-        
-        # Apply OHLCV Resampling rules math
         resample_rules = {
             'open': 'first',
             'high': 'max',
@@ -87,10 +79,7 @@ def resample_to_4h(df_1h):
             'volume': 'sum'
         }
         
-        # '4h' label defines the window, 'closed="left"' aligns the calculation anchor
         df_4h = df_1h.resample('4h', closed='left', label='left').agg(resample_rules)
-        
-        # Drop empty intervals created outside trading session hours
         df_4h = df_4h.dropna(subset=['close']).reset_index()
         return df_4h
     except Exception as e:
@@ -102,13 +91,11 @@ def resample_to_4h(df_1h):
 # ==========================================
 def fetch_candles(symbol, timeframe, limit=100):
     try:
-        # If the tracking sweep requests a 4H interval, we fetch raw 1H data to feed our mathematical resampler
         target_tf = "60m" if timeframe == "4h" else timeframe
         
         yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
         yf_tf = yf_tf_map.get(target_tf, "5m")
         
-        # Expand 4h lookback buffer so the math has plenty of rows to group together
         period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "7d", "1d": "3mo"}
         fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
         
@@ -121,7 +108,6 @@ def fetch_candles(symbol, timeframe, limit=100):
         df = history.reset_index()
         df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
         
-        # Route through the resampling engine if evaluating a 4-Hour setup
         if timeframe == "4h":
             df = resample_to_4h(df)
             if df is None:
@@ -137,7 +123,6 @@ def fetch_candles(symbol, timeframe, limit=100):
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
     
-    # Secure cache matching by tracking the un-paintable unique closed bar index
     live_tracking_key = f"{alert_key}_{current_timestamp}"
     
     if alert_state_cache.get(live_tracking_key) == True:
@@ -148,12 +133,11 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     display_names = {
         "BTC-USD": "BITCOIN (BTC/USD)", 
         "ETH-USD": "ETHEREUM (ETH/USD)", 
-        "GC=F": "GOLD FUTURES"
+        "XAUUSD=X": "GOLD SPOT (XAU/USD)"
     }
     display_name = display_names.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
-    # Dynamic header color adjustment for visually distinguishing Buy/Sell directions
     if "Support" in alert_type or "Bull" in alert_type:
         header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢"
     else:
@@ -177,22 +161,17 @@ def analyze_market(df, symbol):
     tf = df.timeframe_meta
     
     # ----------------------------------------------------
-    # 🛡️ NO-REPAINT SHIFT (.iloc[-2])
+    # 🛡️ NO-REPAINT BOUNDARY LAYER RULES (ILOC[-2])
     # ----------------------------------------------------
-    # We map candle attributes back by 1 block relative to history.
-    # iloc[-1] is skipped because it's flickering live. 
-    # iloc[-2] is verified and can never alter its data points.
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
     
-    # Grab the current real-time close price execution to report accurately on dispatch
     live_market_price = df['close'].iloc[-1]
     target_candle_time = str(df['timestamp'].iloc[-2])
 
     df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
     
-    # Evaluate calculations relative to our historical baseline index anchor
     atr_val = df['atr'].iloc[-2] if not pd.isna(df['atr'].iloc[-2]) else df['close'].iloc[-2] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
     local_rsi = df['rsi'].iloc[-2]
@@ -246,7 +225,6 @@ def analyze_market(df, symbol):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
     remaining_zones = []
-    # Loop over tracked coordinates relative to finalized block values
     for zone in active_zones[symbol][tf]:
         invalidated = False
         
@@ -274,11 +252,10 @@ def analyze_market(df, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Resampled Macro Asset Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold 24/7. TradingView No-Repaint configuration locked.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold Spot 24/7. TradingView No-Repaint configuration locked.")
     
     while True:
         try:
-            # Cryptocurrencies trade 24/7/365, so we run the parsing engines directly without session checks
             for symbol in SYMBOLS:
                 for tf in TIMEFRAMES:
                     df = fetch_candles(symbol, tf)
