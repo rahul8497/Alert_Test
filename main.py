@@ -89,7 +89,6 @@ ACTIVE_SYMBOLS, DISPLAY_NAMES = filter_and_initialize_symbols()
 # ==========================================
 # TECHNICAL PARAMETERS
 # ==========================================
-# Added 1m timeframe natively into the pipeline
 TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
@@ -142,11 +141,9 @@ def resample_to_4h(df_1h):
 def fetch_candles(symbol, timeframe, limit=100):
     try:
         target_tf = "60m" if timeframe == "4h" else timeframe
-        # Mapped '1m' and '3m' correctly to valid yfinance parameters
         yf_tf_map = {"1m": "1m", "3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
         yf_tf = yf_tf_map.get(target_tf, "5m")
         
-        # Pull plenty of historical tracking data frames depending on execution rate
         period_map = {"1m": "1d", "2m": "1d", "5m": "1d", "15m": "1d", "60m": "7d", "1d": "3mo"}
         fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
         
@@ -169,7 +166,7 @@ def fetch_candles(symbol, timeframe, limit=100):
         return None
 
 # ==========================================
-# CORE STRATEGY ANALYSIS MATRIX (LIVE ALIGNED)
+# CORE STRATEGY ANALYSIS MATRIX (CANDLE CLOSE ALIGNED)
 # ==========================================
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
@@ -205,16 +202,25 @@ def analyze_market(df, symbol):
     
     tf = df.timeframe_meta
     
-    close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-1], df['open'].iloc[-1], df['low'].iloc[-1], df['high'].iloc[-1]
-    close_prev, open_prev = df['close'].iloc[-2], df['open'].iloc[-2]
-    target_candle_time = str(df['timestamp'].iloc[-1])
-
+    # Calculate indicators on the full set up to the live data pool
     df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
+
+    # -------------------------------------------------------------
+    # ⚡ MODIFIED INDEX ALIGNMENT FOR CONFIRMED CANDLE CLOSE EVALUATION
+    # iloc[-1] is the unclosed live bar. 
+    # iloc[-2] is the most recently completed, locked-in closed bar.
+    # iloc[-3] is the preceding closed bar.
+    # -------------------------------------------------------------
+    close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
+    close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
     
-    atr_val = df['atr'].iloc[-1] if not pd.isna(df['atr'].iloc[-1]) else df['close'].iloc[-1] * 0.002
+    # Anchor the alert timestamp to the locked-in closed candle to block repainting duplicates
+    target_candle_time = str(df['timestamp'].iloc[-2])
+    
+    atr_val = df['atr'].iloc[-2] if not pd.isna(df['atr'].iloc[-2]) else df['close'].iloc[-2] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
-    local_rsi = df['rsi'].iloc[-1]
+    local_rsi = df['rsi'].iloc[-2]
 
     # Bullish Operator Candle Logic Math
     is_prev_red = close_prev < open_prev
@@ -235,12 +241,12 @@ def analyze_market(df, symbol):
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Live Bull engulfing pattern validated. RSI: {local_rsi:.2f}", close_curr)
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Confirmed Bull engulfing pattern validated at candle close. RSI: {local_rsi:.2f}", close_curr)
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Live Bear engulfing pattern validated. RSI: {local_rsi:.2f}", close_curr)
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Confirmed Bear engulfing pattern validated at candle close. RSI: {local_rsi:.2f}", close_curr)
 
-    # Zone calculation arrays
-    idx = -(SWING_LENGTH + 2)
+    # Zone calculation arrays (Evaluate swings on historically confirmed data structures)
+    idx = -(SWING_LENGTH + 3)
     is_swing_high, is_swing_low = True, True
     
     for check_i in range(1, SWING_LENGTH + 1):
@@ -265,21 +271,24 @@ def analyze_market(df, symbol):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
     remaining_zones = []
+    # Live market structural tracking can continue parsing the current live market high/low bounds
+    live_low, live_high, live_close = df['low'].iloc[-1], df['high'].iloc[-1], df['close'].iloc[-1]
+    
     for zone in active_zones[symbol][tf]:
         invalidated = False
         
         if zone['type'] == "demand":
-            if low_curr <= zone['top'] and high_curr >= zone['bottom']:
-                process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", symbol, tf, 
-                              f"Live price pulled into support zone: `[${zone['bottom']:.2f} - ${zone['top']:.2f}]`", close_curr)
-            if close_curr < zone['bottom']:
+            if live_low <= zone['top'] and live_high >= zone['bottom']:
+                process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", str(df['timestamp'].iloc[-1]), "Demand Zone Touched (Support)", symbol, tf, 
+                              f"Price pulled into support zone: `[${zone['bottom']:.2f} - ${zone['top']:.2f}]`", live_close)
+            if live_close < zone['bottom']:
                 invalidated = True
                 
         elif zone['type'] == "supply":
-            if high_curr >= zone['bottom'] and low_curr <= zone['top']:
-                process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, 
-                              f"Live price pushed into resistance zone: `[${zone['bottom']:.2f} - ${zone['top']:.2f}]`", close_curr)
-            if close_curr > zone['top']:
+            if live_high >= zone['bottom'] and live_low <= zone['top']:
+                process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", str(df['timestamp'].iloc[-1]), "Supply Zone Touched (Resistance)", symbol, tf, 
+                              f"Price pushed into resistance zone: `[${zone['bottom']:.2f} - ${zone['top']:.2f}]`", live_close)
+            if live_close > zone['top']:
                 invalidated = True
 
         if not invalidated:
@@ -300,7 +309,6 @@ def core_market_scanner_loop():
     
     while True:
         try:
-            # Macro markets run 24/7/365, so we bypass traditional stock session parameters
             for symbol in ACTIVE_SYMBOLS:
                 for tf in TIMEFRAMES:
                     df = fetch_candles(symbol, tf)
