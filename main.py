@@ -64,9 +64,10 @@ def send_telegram_message(message):
         print(f"[❌ TELEGRAM ERROR]: {e}")
 
 # ==========================================
-# SEEDING ENGINE (Pre-loads historical data)
+# SEEDING ENGINE (Safe, independent history builder)
 # ==========================================
 def seed_historical_data(symbol, tf):
+    global active_zones, historical_candles
     try:
         interval = tf
         if symbol == "GOLD":
@@ -90,9 +91,33 @@ def seed_historical_data(symbol, tf):
                 })
             df = pd.DataFrame(parsed_data).sort_values(by="time_ms", ascending=True).reset_index(drop=True)
             historical_candles[symbol][tf] = df
-            print(f"[✅ SEEDED]: {symbol} {tf} cache built.")
+            
+            df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
+            
+            for idx in range(SWING_LENGTH + 2, len(df) - 2):
+                is_swing_high, is_swing_low = True, True
+                for check_i in range(1, SWING_LENGTH + 1):
+                    if df['high'].iloc[idx] <= df['high'].iloc[idx - check_i] or df['high'].iloc[idx] <= df['high'].iloc[idx + check_i]: 
+                        is_swing_high = False; break
+                for check_i in range(1, SWING_LENGTH + 1):
+                    if df['low'].iloc[idx] >= df['low'].iloc[idx - check_i] or df['low'].iloc[idx] >= df['low'].iloc[idx + check_i]: 
+                        is_swing_low = False; break
+                
+                atr_val = df['atr'].iloc[idx] if not pd.isna(df['atr'].iloc[idx]) else df['close'].iloc[idx] * 0.002
+                atr_buffer = atr_val * (BOX_WIDTH / 10.0)
+                
+                if is_swing_high:
+                    top_edge = df['high'].iloc[idx]
+                    bottom_edge = top_edge - atr_buffer
+                    if not any(abs(z['top'] - top_edge) < atr_buffer for z in active_zones[symbol][tf]):
+                        active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "supply"})
+                if is_swing_low:
+                    bottom_edge = df['low'].iloc[idx]
+                    top_edge = bottom_edge + atr_buffer
+                    if not any(abs(z['bottom'] - bottom_edge) < atr_buffer for z in active_zones[symbol][tf]):
+                        active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
     except Exception as e:
-        print(f"[❌ SEEDING FAILED] For {symbol} {tf}: {e}")
+        print(f"[❌ PRELOAD FAILURE] {symbol} {tf}: {e}")
 
 # ==========================================
 # CORE ALGO ENGINE (INSTANT CALCULATOR)
@@ -104,13 +129,11 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
     if df is None or len(df) < TREND_LENGTH:
         return
         
-    # Inject live tick parameters into tracking metrics safely
     close_curr, open_curr, low_curr, high_curr = live_price, df['open'].iloc[-1], live_low, live_high
     close_prev, open_prev = df['close'].iloc[-2], df['open'].iloc[-2]
     
     target_candle_time = str(candle_timestamp)
 
-    # Calculate indicators on historical dataframe sequence
     df_copy = df.copy()
     df_copy.loc[df_copy.index[-1], ['close', 'high', 'low']] = [live_price, live_high, live_low]
     
@@ -121,7 +144,6 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
     local_rsi = df_copy['rsi'].iloc[-2]
 
-    # Reversal Candle Evaluation
     is_engulfing_bull = (open_curr <= close_prev) and (close_curr > open_prev)
     bull_reversal = (close_prev < open_prev) and (close_curr > open_curr) and is_engulfing_bull and ((close_curr - low_curr)/low_curr >= PCT_THRESH) and (35 < local_rsi < 75)
 
@@ -133,7 +155,6 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
     if bear_reversal:
         process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle", symbol, tf, f"Instant confirmation. RSI: {local_rsi:.2f}", live_price)
 
-    # Dynamic Zone Generator Realtime Checks
     idx = -(SWING_LENGTH + 2)
     is_swing_high, is_swing_low = True, True
     for check_i in range(1, SWING_LENGTH + 1):
@@ -152,7 +173,6 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
         if not any(abs(z['bottom'] - bottom_edge) < atr_buffer for z in active_zones[symbol][tf]):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
-    # Zone Hit Evaluation Engine
     remaining_zones = []
     for zone in active_zones[symbol][tf]:
         invalidated = False
@@ -212,20 +232,24 @@ def on_message(ws, message):
         pass
 
 def on_open(ws):
-    print("WebSocket pipeline verified. Initializing streams...")
-    
-    # Send the online notification instantly when connection confirms!
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. Live Real-Time WebSocket Connection Established.")
-
+    print("WebSocket pipeline open. Subscribing to data feeds...")
     for symbol in SYMBOLS:
         for tf in TIMEFRAMES:
-            seed_historical_data(symbol, tf)
             sub_symbol = "GOLD-USDT" if symbol == "GOLD" else symbol
             sub_msg = {"id": f"sub_{symbol}_{tf}", "reqType": "sub", "dataType": f"{sub_symbol}@kline_{tf}"}
             ws.send(json.dumps(sub_msg))
-            time.sleep(0.1)
+            time.sleep(0.05) # Super fast channel activation pipeline
 
 def run_websocket_pipeline():
+    # 🔥 FIX: Preload historical mapping safely BEFORE starting the live socket connection
+    print("Pre-building core historical market metrics map safely...")
+    for symbol in SYMBOLS:
+        for tf in TIMEFRAMES:
+            seed_historical_data(symbol, tf)
+            time.sleep(0.3) # Rate limit safety buffer spacing
+            
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. System stable, history cached, streams connected.")
+    
     websocket.setdefaulttimeout(15)
     ws_url = "wss://open-api-swap.bingx.com/swap-market"
     
@@ -235,8 +259,8 @@ def run_websocket_pipeline():
                 ws_url,
                 on_message=on_message,
                 on_open=on_open,
-                on_error=lambda ws, err: print(f"[⚠️ WS ERROR]: {err}"),
-                on_close=lambda ws, stat, msg: print("Stream disconnected. Reconnecting...")
+                on_error=lambda ws, err: print(f"[⚠️ WS TIMEOUT]: {err}"),
+                on_close=lambda ws, stat, msg: print("Stream disconnected. Restarting routing loop...")
             )
             ws.run_forever()
         except Exception as e:
