@@ -35,7 +35,8 @@ def run_web_server():
 # CONFIGURATION & PARAMETERS
 # ==========================================
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "GOLD"]
-TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
+# 🔥 OPTIMIZATION: Added '1m' to ensure instant live alert generation for testing
+TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
@@ -276,7 +277,7 @@ def analyze_market(df, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"TradingView-Aligned BingX Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BingX Assets. Instant TradingView Alert emulation ACTIVE.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BingX Assets. 1-Minute fast scanning active.")
 
     while True:
         try:
