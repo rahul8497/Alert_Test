@@ -89,7 +89,7 @@ ACTIVE_SYMBOLS, DISPLAY_NAMES = filter_and_initialize_symbols()
 # ==========================================
 # TECHNICAL PARAMETERS
 # ==========================================
-TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
+TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
