@@ -152,12 +152,10 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     )
     send_telegram_message(tg_message)
 
-def analyze_market(df, symbol):
+def analyze_market(df, symbol, tf):
     global active_zones
     if len(df) < TREND_LENGTH + 10:
         return
-    
-    tf = df.timeframe_meta
     
     # 🛡️ NO-REPAINT BOUNDARY LAYER RULES (ILOC[-2] is the last closed candle)
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
@@ -182,11 +180,11 @@ def analyze_market(df, symbol):
     bull_reversal = (is_prev_red and is_curr_green and is_engulfing_bull and 
                      (green_move_pct >= PCT_THRESH) and (35 < local_rsi < 75))
 
-    # Bearish Operator Candle Logic Math
+    # Bearish Operator Candle Logic Math (FIXED TYPO HERE)
     is_prev_green = close_prev > open_prev
     is_curr_red = close_curr < open_curr
     red_move_pct = (high_curr - close_curr) / high_curr if high_curr != 0 else 0
-    is_engulfing_bear = (open_curr >= close_prev) and (close_closed < open_prev)
+    is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
     
     bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
@@ -235,7 +233,7 @@ def analyze_market(df, symbol):
         elif zone['type'] == "supply":
             if high_curr >= zone['bottom'] and low_curr <= zone['top']:
                 process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, 
-                              f"Confirmed price pushed into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
+                              f"Confirmed price pulled into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
             if close_curr > zone['top']:
                 invalidated = True
 
@@ -257,13 +255,12 @@ def core_market_scanner_loop():
                 for tf in TIMEFRAMES:
                     df = fetch_candles(symbol, tf)
                     if df is not None and not df.empty:
-                        df.timeframe_meta = tf
-                        analyze_market(df, symbol)
+                        analyze_market(df, symbol, tf) # <-- Explicitly passed tf here
                     
-                    # Safe request rate control
-                    time.sleep(1.0) 
+                    # Safe request rate control optimized to prevent cycle lag
+                    time.sleep(0.2) 
                         
-            time.sleep(15)
+            time.sleep(10)
         except Exception as e:
             print(f"Loop Engine Fault Trace: {e}")
             time.sleep(5)
