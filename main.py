@@ -39,8 +39,10 @@ TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  
-SWING_LENGTH = 10
-BOX_WIDTH = 2.0  
+
+# ⚡ OPTIMIZED HIGH-FREQUENCY ALERTS SETTINGS
+SWING_LENGTH = 4  # Reduced from 10 to capture zones much faster on short intervals (3m/5m)
+BOX_WIDTH = 8.0     # Increased from 2.0 to widen the zone box and prevent price from skipping over it
 
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
@@ -255,9 +257,9 @@ def core_market_scanner_loop():
                 for tf in TIMEFRAMES:
                     df = fetch_candles(symbol, tf)
                     if df is not None and not df.empty:
-                        analyze_market(df, symbol, tf) # <-- Explicitly passed tf here
+                        analyze_market(df, symbol, tf)
                     
-                    # Safe request rate control optimized to prevent cycle lag
+                    # Optimized API safety gap (0.2s) to maximize processing speed without hitting rate limits
                     time.sleep(0.2) 
                         
             time.sleep(10)
