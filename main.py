@@ -68,14 +68,15 @@ def send_telegram_message(message):
 # ==========================================
 def seed_historical_data(symbol, tf):
     global active_zones, historical_candles
+    
+    # 🔥 SAFE PATCH: Skip historical seeding for Gold to prevent v1 API structure crashes
+    if symbol == "GOLD":
+        return
+        
     try:
         interval = tf
-        if symbol == "GOLD":
-            url = "https://open-api.bingx.com/openApi/swap/v1/market/kline"
-            params = {"symbol": "GOLD-USDT", "interval": interval, "limit": 150}
-        else:
-            url = "https://open-api.bingx.com/openApi/swap/v3/market/kline"
-            params = {"symbol": symbol, "interval": interval, "limit": 150}
+        url = "https://open-api.bingx.com/openApi/swap/v3/market/kline"
+        params = {"symbol": symbol, "interval": interval, "limit": 150}
             
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, params=params, headers=headers, timeout=10)
@@ -125,16 +126,20 @@ def seed_historical_data(symbol, tf):
 def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timestamp, candle_open, candle_volume):
     global active_zones, historical_candles
     
+    # For Gold, initialize an empty baseline DataFrame if it arrives via stream first
+    if historical_candles[symbol][tf] is None:
+        historical_candles[symbol][tf] = pd.DataFrame([{
+            "time_ms": int(candle_timestamp.timestamp() * 1000),
+            "timestamp": candle_timestamp,
+            "open": candle_open, "high": live_high, "low": live_low, "close": live_price, "volume": candle_volume
+        }])
+
     df = historical_candles[symbol][tf]
-    if df is None or len(df) < TREND_LENGTH:
-        return
         
-    # 🔥 MEMORY MAINTENANCE LAYER: Check if a new candle interval has arrived from the WebSocket stream
     current_live_time_ms = int(candle_timestamp.timestamp() * 1000)
     last_known_time_ms = int(df['time_ms'].iloc[-1])
     
     if current_live_time_ms > last_known_time_ms:
-        # The previous candle just finished. Append a brand new row structure into the array chain.
         new_row = pd.DataFrame([{
             "time_ms": current_live_time_ms,
             "timestamp": candle_timestamp,
@@ -149,9 +154,11 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
             df = df.iloc[-200:].reset_index(drop=True)
         historical_candles[symbol][tf] = df
 
-    # Sync live tick values onto the tracking row pointer safely
     df.loc[df.index[-1], ['close', 'high', 'low', 'volume']] = [live_price, live_high, live_low, candle_volume]
     
+    if len(df) < 15: # Safety catch for unseeded assets like Gold on initial ticks
+        return
+
     close_curr, open_curr, low_curr, high_curr = live_price, df['open'].iloc[-1], live_low, live_high
     close_prev, open_prev = df['close'].iloc[-2], df['open'].iloc[-2]
     
@@ -159,17 +166,17 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
 
     df_copy = df.copy()
     df_copy['rsi'] = ta.rsi(df_copy['close'], length=RSI_LENGTH)
-    df_copy['atr'] = ta.atr(df_copy['high'], df_copy['low'], df_copy['close'], length=50)
+    df_copy['atr'] = ta.atr(df_copy['high'], df_copy['low'], df_copy['close'], length=14)
     
     atr_val = df_copy['atr'].iloc[-2] if not pd.isna(df_copy['atr'].iloc[-2]) else live_price * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
-    local_rsi = df_copy['rsi'].iloc[-2]
+    local_rsi = df_copy['rsi'].iloc[-2] if not pd.isna(df_copy['rsi'].iloc[-2]) else 50
 
     is_engulfing_bull = (open_curr <= close_prev) and (close_curr > open_prev)
-    bull_reversal = (close_prev < open_prev) and (close_curr > open_curr) and is_engulfing_bull and ((close_curr - low_curr)/low_curr >= PCT_THRESH) and (35 < local_rsi < 75)
+    bull_reversal = (close_prev < open_prev) and (close_curr > open_curr) and is_engulfing_bull and ((close_curr - low_curr)/low_curr >= PCT_THRESH) and (20 < local_rsi < 80)
 
     is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
-    bear_reversal = (close_prev > open_prev) and (close_curr < open_curr) and is_engulfing_bear and ((high_curr - close_curr)/high_curr >= PCT_THRESH) and (25 < local_rsi < 65)
+    bear_reversal = (close_prev > open_prev) and (close_curr > open_curr) and is_engulfing_bear and ((high_curr - close_curr)/high_curr >= PCT_THRESH) and (20 < local_rsi < 80)
 
     if bull_reversal:
         process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle", symbol, tf, f"Instant confirmation. RSI: {local_rsi:.2f}", live_price)
@@ -200,11 +207,13 @@ def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timest
         if zone['type'] == "demand":
             if live_low <= zone['top'] and live_high >= zone['bottom']:
                 process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", symbol, tf, f"Realtime Instant Touch: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_price)
-            if live_price < zone['bottom']: invalidated = True
+            if close_curr < zone['bottom'] and current_live_time_ms > last_known_time_ms: 
+                invalidated = True
         elif zone['type'] == "supply":
             if live_high >= zone['bottom'] and live_low <= zone['top']:
                 process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, f"Realtime Instant Touch: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_price)
-            if live_price > zone['top']: invalidated = True
+            if close_curr > zone['top'] and current_live_time_ms > last_known_time_ms: 
+                invalidated = True
         if not invalidated: remaining_zones.append(zone)
     active_zones[symbol][tf] = remaining_zones
 
@@ -268,9 +277,9 @@ def run_websocket_pipeline():
     for symbol in SYMBOLS:
         for tf in TIMEFRAMES:
             seed_historical_data(symbol, tf)
-            time.sleep(0.3) 
+            time.sleep(0.15) 
             
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. System stable, history cached, streams connected.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. System stable, crypto history cached, wicks protected.")
     
     websocket.setdefaulttimeout(15)
     ws_url = "wss://open-api-swap.bingx.com/swap-market"
