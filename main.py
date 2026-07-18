@@ -38,8 +38,8 @@ def run_web_server():
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
-# Macro tickers mapped exactly to standard Yahoo Finance formats
-STOCK_LIST = ["BTC-USD", "ETH-USD", "GC=F"]
+# 🔄 UPDATED WATCHLIST: Replaced 'GC=F' with 'XAUT-USD' for Live Gold Spot
+STOCK_LIST = ["BTC-USD", "ETH-USD", "XAUT-USD"]
 
 # ==========================================
 # 📈 STARTUP PRICE-FILTERING LOGIC (ADAPTED FOR GLOBAL MACRO)
@@ -71,7 +71,7 @@ def filter_and_initialize_symbols():
                     friendly_name = symbol
                     if symbol == "BTC-USD": friendly_name = "BITCOIN (BTC/USD)"
                     elif symbol == "ETH-USD": friendly_name = "ETHEREUM (ETH/USD)"
-                    elif symbol == "GC=F": friendly_name = "GOLD FUTURES"
+                    elif symbol == "XAUT-USD": friendly_name = "GOLD SPOT (XAUT/USD)"
                     
                     display_names[symbol] = friendly_name
                     print(f"✅ ACCEPTED: {symbol} (Price: ${price:.2f})")
@@ -202,20 +202,13 @@ def analyze_market(df, symbol):
     
     tf = df.timeframe_meta
     
-    # Calculate indicators on the full set up to the live data pool
     df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
 
-    # -------------------------------------------------------------
-    # ⚡ MODIFIED INDEX ALIGNMENT FOR CONFIRMED CANDLE CLOSE EVALUATION
-    # iloc[-1] is the unclosed live bar. 
-    # iloc[-2] is the most recently completed, locked-in closed bar.
-    # iloc[-3] is the preceding closed bar.
-    # -------------------------------------------------------------
+    # index alignment for locked-in closed bar evaluation (iloc[-2])
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
     
-    # Anchor the alert timestamp to the locked-in closed candle to block repainting duplicates
     target_candle_time = str(df['timestamp'].iloc[-2])
     
     atr_val = df['atr'].iloc[-2] if not pd.isna(df['atr'].iloc[-2]) else df['close'].iloc[-2] * 0.002
@@ -245,7 +238,7 @@ def analyze_market(df, symbol):
     if bear_reversal:
         process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Confirmed Bear engulfing pattern validated at candle close. RSI: {local_rsi:.2f}", close_curr)
 
-    # Zone calculation arrays (Evaluate swings on historically confirmed data structures)
+    # Zone calculation arrays
     idx = -(SWING_LENGTH + 3)
     is_swing_high, is_swing_low = True, True
     
@@ -271,7 +264,6 @@ def analyze_market(df, symbol):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
     remaining_zones = []
-    # Live market structural tracking can continue parsing the current live market high/low bounds
     live_low, live_high, live_close = df['low'].iloc[-1], df['high'].iloc[-1], df['close'].iloc[-1]
     
     for zone in active_zones[symbol][tf]:
@@ -304,7 +296,7 @@ def core_market_scanner_loop():
     send_telegram_message(
         f"🚀 *Macro Watchlist Engine Online* 🚀\n"
         f"• Monitoring dedicated bot feed via yfinance.\n"
-        f"• Active watchlist assets: {len(ACTIVE_SYMBOLS)} (BTC, ETH, GOLD)"
+        f"• Active watchlist assets: {len(ACTIVE_SYMBOLS)} (BTC, ETH, GOLD SPOT)"
     )
     
     while True:
