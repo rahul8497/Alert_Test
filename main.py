@@ -122,21 +122,42 @@ def seed_historical_data(symbol, tf):
 # ==========================================
 # CORE ALGO ENGINE (INSTANT CALCULATOR)
 # ==========================================
-def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timestamp):
+def process_live_tick(symbol, tf, live_price, live_high, live_low, candle_timestamp, candle_open, candle_volume):
     global active_zones, historical_candles
     
     df = historical_candles[symbol][tf]
     if df is None or len(df) < TREND_LENGTH:
         return
         
+    # 🔥 MEMORY MAINTENANCE LAYER: Check if a new candle interval has arrived from the WebSocket stream
+    current_live_time_ms = int(candle_timestamp.timestamp() * 1000)
+    last_known_time_ms = int(df['time_ms'].iloc[-1])
+    
+    if current_live_time_ms > last_known_time_ms:
+        # The previous candle just finished. Append a brand new row structure into the array chain.
+        new_row = pd.DataFrame([{
+            "time_ms": current_live_time_ms,
+            "timestamp": candle_timestamp,
+            "open": candle_open,
+            "high": live_high,
+            "low": live_low,
+            "close": live_price,
+            "volume": candle_volume
+        }])
+        df = pd.concat([df, new_row], ignore_index=True)
+        if len(df) > 200: 
+            df = df.iloc[-200:].reset_index(drop=True)
+        historical_candles[symbol][tf] = df
+
+    # Sync live tick values onto the tracking row pointer safely
+    df.loc[df.index[-1], ['close', 'high', 'low', 'volume']] = [live_price, live_high, live_low, candle_volume]
+    
     close_curr, open_curr, low_curr, high_curr = live_price, df['open'].iloc[-1], live_low, live_high
     close_prev, open_prev = df['close'].iloc[-2], df['open'].iloc[-2]
     
     target_candle_time = str(candle_timestamp)
 
     df_copy = df.copy()
-    df_copy.loc[df_copy.index[-1], ['close', 'high', 'low']] = [live_price, live_high, live_low]
-    
     df_copy['rsi'] = ta.rsi(df_copy['close'], length=RSI_LENGTH)
     df_copy['atr'] = ta.atr(df_copy['high'], df_copy['low'], df_copy['close'], length=50)
     
@@ -224,9 +245,11 @@ def on_message(ws, message):
             live_close = float(c["c"])
             live_high = float(c["h"])
             live_low = float(c["l"])
+            live_open = float(c["o"])
+            live_volume = float(c["v"])
             candle_time = pd.to_datetime(int(c["t"]), unit='ms')
             
-            process_live_tick(symbol, tf, live_close, live_high, live_low, candle_time)
+            process_live_tick(symbol, tf, live_close, live_high, live_low, candle_time, live_open, live_volume)
             
     except Exception as e:
         pass
@@ -238,15 +261,14 @@ def on_open(ws):
             sub_symbol = "GOLD-USDT" if symbol == "GOLD" else symbol
             sub_msg = {"id": f"sub_{symbol}_{tf}", "reqType": "sub", "dataType": f"{sub_symbol}@kline_{tf}"}
             ws.send(json.dumps(sub_msg))
-            time.sleep(0.05) # Super fast channel activation pipeline
+            time.sleep(0.05)
 
 def run_websocket_pipeline():
-    # 🔥 FIX: Preload historical mapping safely BEFORE starting the live socket connection
     print("Pre-building core historical market metrics map safely...")
     for symbol in SYMBOLS:
         for tf in TIMEFRAMES:
             seed_historical_data(symbol, tf)
-            time.sleep(0.3) # Rate limit safety buffer spacing
+            time.sleep(0.3) 
             
     send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. System stable, history cached, streams connected.")
     
