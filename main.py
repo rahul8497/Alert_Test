@@ -35,7 +35,7 @@ def run_web_server():
 # ==========================================
 # 🚨 CONFIGURE YOUR NEW BOT & CHAT ID HERE 🚨
 # ==========================================
-TELEGRAM_TOKEN = "8850768564:AAEAOEjL_CGSAceiWz5gSVW5O9OBbsPkPno"
+TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
 # Macro tickers mapped exactly to standard Yahoo Finance formats
