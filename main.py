@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: BINGX TRADINGVIEW-OPTIMIZED ENGINE ACTIVE 24/7", 200
+    return "Bot Matrix Status: BINGX DUAL-MODE MIXED TRIGGER ENGINE ACTIVE 24/7", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -35,7 +35,6 @@ def run_web_server():
 # CONFIGURATION & PARAMETERS
 # ==========================================
 SYMBOLS = ["BTC-USDT", "ETH-USDT", "GOLD"]
-# 🔥 OPTIMIZATION: Added '1m' to ensure instant live alert generation for testing
 TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
@@ -90,7 +89,7 @@ def resample_to_4h(df_1h):
 # ==========================================
 # NATIVE BINGX REST DATA PIPELINE
 # ==========================================
-def fetch_candles(symbol, timeframe, limit=100):
+def fetch_candles(symbol, timeframe, limit=1000):
     try:
         target_tf = "1h" if timeframe == "4h" else timeframe
 
@@ -101,7 +100,7 @@ def fetch_candles(symbol, timeframe, limit=100):
             url = "https://open-api.bingx.com/openApi/swap/v3/market/kline"
             api_symbol = symbol
 
-        fetch_limit = 500 if timeframe == "4h" else 150
+        fetch_limit = 1000 if timeframe in ["1m", "3m", "5m", "4h"] else 200
         
         params = {
             "symbol": api_symbol,
@@ -184,24 +183,26 @@ def analyze_market(df, symbol):
     tf = df.timeframe_meta
 
     # ⚡ DATA MATRIX POINTERS
+    # Pointers for Live Wick Cross tracking
     live_close = df['close'].iloc[-1]
     live_high = df['high'].iloc[-1]
     live_low = df['low'].iloc[-1]
+    live_candle_time = str(df['timestamp'].iloc[-1])
 
+    # Pointers for Closed Body Candle tracking
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
-
-    target_candle_time = str(df['timestamp'].iloc[-2])
-    live_candle_time = str(df['timestamp'].iloc[-1])
+    closed_candle_time = str(df['timestamp'].iloc[-2])
 
     df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
 
+    # Base indicators calculated from the last completed candle (iloc[-2])
     atr_val = df['atr'].iloc[-2] if not pd.isna(df['atr'].iloc[-2]) else df['close'].iloc[-2] * 0.002
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
     local_rsi = df['rsi'].iloc[-2]
 
-    # 1. Bullish/Bearish Operator Candle Formations (Evaluated on Closed Bar)
+    # 1. 🔒 CLOSED BODY OPERATOR CANDLE TRIGGERS (Evaluated strictly on completed iloc[-2] bar)
     is_prev_red = close_prev < open_prev
     is_curr_green = close_curr > open_curr
     green_move_pct = (close_curr - low_curr) / low_curr if low_curr != 0 else 0
@@ -219,11 +220,11 @@ def analyze_market(df, symbol):
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Pattern validated on candle close. RSI: {local_rsi:.2f}", live_close)
+        process_alert(f"{symbol}_{tf}_OC_Bull", closed_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"CLOSED BODY VALIDATION: Engulfing pattern confirmed on candle close. RSI: {local_rsi:.2f}", close_curr)
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Pattern validated on candle close. RSI: {local_rsi:.2f}", live_close)
+        process_alert(f"{symbol}_{tf}_OC_Bear", closed_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"CLOSED BODY VALIDATION: Engulfing pattern confirmed on candle close. RSI: {local_rsi:.2f}", close_curr)
 
-    # 2. Dynamic Structural Zone Generation Arrays
+    # 2. Dynamic Structural Zone Generation Arrays (Drawn safely from historical swing peaks)
     idx = -(SWING_LENGTH + 3)
     is_swing_high, is_swing_low = True, True
 
@@ -248,7 +249,7 @@ def analyze_market(df, symbol):
         if not any(abs(z['bottom'] - bottom_edge) < atr_buffer for z in active_zones[symbol][tf]):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
 
-    # 3. Dynamic Tracking Loop (Instantly fires on live wicking points like TradingView UI alerts)
+    # 3. ⚡ INSTANT WICK ZONE TOUCH TRIGGERS (Fires dynamically on current active iloc[-1] bar)
     remaining_zones = []
     for zone in active_zones[symbol][tf]:
         invalidated = False
@@ -256,14 +257,14 @@ def analyze_market(df, symbol):
         if zone['type'] == "demand":
             if live_low <= zone['top'] and live_high >= zone['bottom']:
                 process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", live_candle_time, "Demand Zone Touched (Support)", symbol, tf, 
-                              f"INSTANT WICK TRIGGER: Price hit support level `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_close)
+                              f"INSTANT WICK TRIGGER: Live wick hit support coordinates `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_close)
             if close_curr < zone['bottom']:
                 invalidated = True
 
         elif zone['type'] == "supply":
             if live_high >= zone['bottom'] and live_low <= zone['top']:
                 process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", live_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, 
-                              f"INSTANT WICK TRIGGER: Price hit resistance level `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_close)
+                              f"INSTANT WICK TRIGGER: Live wick hit resistance coordinates `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_close)
             if close_curr > zone['top']:
                 invalidated = True
 
@@ -276,8 +277,8 @@ def analyze_market(df, symbol):
 # RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"TradingView-Aligned BingX Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BingX Assets. 1-Minute fast scanning active.")
+    print(f"TradingView Dual-Mode Engine Online...")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BingX Assets. Instant Wick Touch & Closed Body Operator Candle matrix engaged.")
 
     while True:
         try:
