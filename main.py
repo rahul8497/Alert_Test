@@ -6,7 +6,6 @@ import pandas as pd
 import pandas_ta as ta
 import numpy as np
 import requests
-import yfinance as yf
 from flask import Flask
 
 # ==========================================
@@ -26,7 +25,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & NO-REPAINT GOLD SPOT ENGINE ACTIVE 24/7", 200
+    return "Bot Matrix Status: ONLINE & COINBASE-TELEGRAM-TRADINGVIEW CORE ENGINE ACTIVE 24/7", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -35,8 +34,8 @@ def run_web_server():
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Swapped "GC=F" to "XAUUSD=X" to capture the physical Spot Market feed directly
-SYMBOLS = ["BTC-USD", "ETH-USD", "XAUUSD=X"]
+# Coinbase API standardizes product symbols with hyphens (e.g., BTC-USD)
+SYMBOLS = ["BTC-USD", "ETH-USD"] 
 TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
@@ -52,11 +51,11 @@ active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in SYMBOLS}
 alert_state_cache = {}
 
 # ==========================================
-# TELEGRAM DISPATCH PIPELINE
+# TELEGRAM DISPATCH PIPELINE WITH TRADINGVIEW ENHANCEMENTS
 # ==========================================
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
         requests.post(url, json=payload)
     except Exception as e:
@@ -87,34 +86,60 @@ def resample_to_4h(df_1h):
         return None
 
 # ==========================================
-# DATA FETCHING PIPELINE
+# COINBASE PUBLIC EXCHANGE DATA PIPELINE
 # ==========================================
-def fetch_candles(symbol, timeframe, limit=100):
+def fetch_candles(symbol, timeframe, limit=150):
     try:
-        target_tf = "60m" if timeframe == "4h" else timeframe
+        # Step A: Map out timeframes to Coinbase granularity (represented in seconds)
+        cb_granularity_map = {
+            "3m": 60,       # Base on 1m candles if 3m isn't native, or fetch next available
+            "5m": 300,      # 5 minutes
+            "15m": 900,     # 15 minutes
+            "1h": 3600,     # 1 hour
+            "4h": 3600,     # Pulled via 1h for resampler consistency
+            "1d": 86400     # 1 day
+        }
         
-        yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
-        yf_tf = yf_tf_map.get(target_tf, "5m")
+        # Adjust target timeframe to fetch raw data for the 4h math engine
+        target_tf = "1h" if timeframe == "4h" else timeframe
+        granularity = cb_granularity_map.get(target_tf, 300)
         
-        period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "7d", "1d": "3mo"}
-        fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
+        # Step B: Query Public API (No authentication keys required)
+        url = f"https://api.exchange.coinbase.com/products/{symbol}/candles"
+        params = {"granularity": granularity}
         
-        ticker = yf.Ticker(symbol)
-        history = ticker.history(period=fetch_period, interval=yf_tf)
+        headers = {"User-Agent": "CryptoAlertBot/1.0"}
+        response = requests.get(url, params=params, headers=headers)
         
-        if history.empty:
+        if response.status_code != 200:
             return None
             
-        df = history.reset_index()
-        df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        data = response.json() # Returns a list of arrays: [time, low, high, open, close, volume]
+        if not data:
+            return None
+            
+        # Step C: Parse data array into Structured Dataframe
+        df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
         
+        # Coinbase API returns data ordered from newest to oldest; reverse it for technical analysis
+        df = df.iloc[::-1].reset_index(drop=True)
+        
+        # Convert raw unix time to standard datetime format
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+        
+        # Execute 4h math layer if targeted
         if timeframe == "4h":
             df = resample_to_4h(df)
             if df is None:
                 return None
-                
+        
+        # Force float parameters across the data array
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = df[col].astype(float)
+            
         return df.tail(limit).copy()
     except Exception as e:
+        print(f"Coinbase Engine Error for {symbol} ({timeframe}): {e}")
         return None
 
 # ==========================================
@@ -130,13 +155,13 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
         
     alert_state_cache[live_tracking_key] = True
     
-    display_names = {
-        "BTC-USD": "BITCOIN (BTC/USD)", 
-        "ETH-USD": "ETHEREUM (ETH/USD)", 
-        "XAUUSD=X": "GOLD SPOT (XAU/USD)"
-    }
-    display_name = display_names.get(symbol, symbol)
+    # Generate clean layout metrics for display
+    clean_symbol = symbol.replace("-", "") # Format BTC-USD to BTCUSD for links
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
+    
+    # 🔗 BUILD TRADINGVIEW DEEP LINK PROTOCOLS
+    # This constructs deep links targeting the Coinbase specific spot layout on TradingView
+    tv_chart_url = f"https://www.tradingview.com/chart/?symbol=COINBASE:{clean_symbol}"
     
     if "Support" in alert_type or "Bull" in alert_type:
         header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢"
@@ -145,11 +170,12 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     
     tg_message = (
         f"{header}\n\n"
-        f"• *Asset:* `{display_name}`\n"
+        f"• *Asset:* [{symbol}]({tv_chart_url}) (Coinbase Spot Feed)\n"
         f"• *Price:* `{price_str}`\n"
-        f"• *Timeframe:* `{timeframe.upper()}`\n"
+        f"• *Timeframe:* [{timeframe.upper()}]({tv_chart_url})\n"
         f"• *Signal:* `{alert_type}`\n"
-        f"• *Context:* {message}"
+        f"• *Context:* {message}\n\n"
+        f"📊 _Click the asset name to open this chart instantly on TradingView_"
     )
     send_telegram_message(tg_message)
 
@@ -251,8 +277,8 @@ def analyze_market(df, symbol):
 # RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"Resampled Macro Asset Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold Spot 24/7. TradingView No-Repaint configuration locked.")
+    print(f"Resampled Macro Asset Matrix Processing Engine Online via Coinbase API...")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Coinbase API Spot pairs 24/7. TradingView Cross-Links operational.")
     
     while True:
         try:
@@ -262,9 +288,13 @@ def core_market_scanner_loop():
                     if df is not None and not df.empty:
                         df.timeframe_meta = tf
                         analyze_market(df, symbol)
+                    
+                    # Small rest gap to respect Coinbase API public rate-limiting limits
+                    time.sleep(1.5)
                         
             time.sleep(15)
         except Exception as e:
+            print(f"Loop Engine Fault Trace: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
