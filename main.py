@@ -185,45 +185,41 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
 # ==========================================
 def on_message(ws, message):
     try:
-        # BingX WebSocket payloads are always compressed in gzip format
         compressed_data = gzip.GzipFile(fileobj=io.BytesIO(message)).read()
         data = json.loads(compressed_data.decode('utf-8'))
         
-        # Keep connection alive
         if data.get("ping"):
             ws.send(json.dumps({"pong": data["ping"]}))
             return
 
-        # Parse live incoming K-Line stream data packet
         if "kline" in data.get("dataType", ""):
             event_data = data.get("data", [])
             if not event_data: return
             
             c = event_data[0]
             symbol = data["dataType"].split("@")[0]
-            # Normalize symbol name back to framework standards
             if symbol == "GOLD-USDT": symbol = "GOLD"
             
-            tf = c["i"] # Timeframe string channel matching descriptor
+            tf = c["i"] 
             live_close = float(c["c"])
             live_high = float(c["h"])
             live_low = float(c["l"])
             candle_time = pd.to_datetime(int(c["t"]), unit='ms')
             
-            # Process calculations instantly on the incoming price tick
             process_live_tick(symbol, tf, live_close, live_high, live_low, candle_time)
             
     except Exception as e:
         pass
 
 def on_open(ws):
-    print("WebSocket pipeline verified. Initializing data channel mapping subscriptions...")
+    print("WebSocket pipeline verified. Initializing streams...")
+    
+    # Send the online notification instantly when connection confirms!
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. Live Real-Time WebSocket Connection Established.")
+
     for symbol in SYMBOLS:
         for tf in TIMEFRAMES:
-            # Seed the lookup array context first
             seed_historical_data(symbol, tf)
-            
-            # Subscribe to the target channel streaming feed
             sub_symbol = "GOLD-USDT" if symbol == "GOLD" else symbol
             sub_msg = {"id": f"sub_{symbol}_{tf}", "reqType": "sub", "dataType": f"{sub_symbol}@kline_{tf}"}
             ws.send(json.dumps(sub_msg))
@@ -231,7 +227,6 @@ def on_open(ws):
 
 def run_websocket_pipeline():
     websocket.setdefaulttimeout(15)
-    # Open continuous stream link via BingX public socket router gateway
     ws_url = "wss://open-api-swap.bingx.com/swap-market"
     
     while True:
@@ -240,17 +235,14 @@ def run_websocket_pipeline():
                 ws_url,
                 on_message=on_message,
                 on_open=on_open,
-                on_error=lambda ws, err: print(f"[⚠️ WS TIMEOUT/ERROR]: {err}"),
-                on_close=lambda ws, stat, msg: print("Stream disconnected. Restarting routing loop...")
+                on_error=lambda ws, err: print(f"[⚠️ WS ERROR]: {err}"),
+                on_close=lambda ws, stat, msg: print("Stream disconnected. Reconnecting...")
             )
             ws.run_forever()
         except Exception as e:
             time.sleep(5)
 
 if __name__ == "__main__":
-    # Start live calculations engine
     ws_thread = threading.Thread(target=run_websocket_pipeline, daemon=True)
     ws_thread.start()
-    
-    # Run the background heartbeat dashboard web server
     run_web_server()
