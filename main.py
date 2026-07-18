@@ -20,13 +20,13 @@ if not hasattr(np, 'bool'):
     np.bool = bool
 
 # ==========================================
-# 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER FREE TIER
+# 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Bot Matrix Status: ONLINE | Scanning {len(ACTIVE_SYMBOLS)} Macro Assets Under $100,000", 200
+    return f"Bot Matrix Status: ONLINE | Scanning {len(ACTIVE_SYMBOLS)} Macro Assets Under $150,000", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -38,7 +38,7 @@ def run_web_server():
 TELEGRAM_TOKEN = "8850768564:AAEAOEjL_CGSAceiWz5gSVW5O9OBbsPkPno"
 TELEGRAM_CHAT_ID = "1136613703"
 
-# Comprehensive list of Macro Assets mapped to standard Yahoo Finance Tickers
+# Macro tickers mapped exactly to standard Yahoo Finance formats
 STOCK_LIST = ["BTC-USD", "ETH-USD", "GC=F"]
 
 # ==========================================
@@ -52,7 +52,7 @@ def filter_and_initialize_symbols():
     active_list = []
     display_names = {}
     
-    print("\n🔍 Evaluating Assets. Filtering out assets above $100,000...")
+    print("\n🔍 Evaluating Global Watchlist. Filtering out assets above $150,000...")
     for symbol in STOCK_LIST:
         try:
             stock = yf.Ticker(symbol)
@@ -65,7 +65,7 @@ def filter_and_initialize_symbols():
                     price = history['Close'].iloc[-1]
             
             if price is not None and price > 0:
-                if price <= 100000.0:  # Capped dynamically for macro assets
+                if price <= 150000.0:  # Custom price filter ceiling for global macro tickers
                     active_list.append(symbol)
                     
                     friendly_name = symbol
@@ -89,13 +89,14 @@ ACTIVE_SYMBOLS, DISPLAY_NAMES = filter_and_initialize_symbols()
 # ==========================================
 # TECHNICAL PARAMETERS
 # ==========================================
-TIMEFRAMES = ["1m","3m", "5m", "15m", "1h", "4h", "1d"]
+# Added 1m timeframe natively into the pipeline
+TIMEFRAMES = ["1m", "3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  
 SWING_LENGTH = 10
-BOX_WIDTH = 2.0  # Match TradingView UI box boundaries
+BOX_WIDTH = 2.0  
 
 active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in ACTIVE_SYMBOLS}
 alert_state_cache = {}
@@ -141,10 +142,12 @@ def resample_to_4h(df_1h):
 def fetch_candles(symbol, timeframe, limit=100):
     try:
         target_tf = "60m" if timeframe == "4h" else timeframe
-        yf_tf_map = {"3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
+        # Mapped '1m' and '3m' correctly to valid yfinance parameters
+        yf_tf_map = {"1m": "1m", "3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
         yf_tf = yf_tf_map.get(target_tf, "5m")
         
-        period_map = {"2m": "1d", "5m": "1d", "15m": "1d", "60m": "7d", "1d": "3mo"}
+        # Pull plenty of historical tracking data frames depending on execution rate
+        period_map = {"1m": "1d", "2m": "1d", "5m": "1d", "15m": "1d", "60m": "7d", "1d": "3mo"}
         fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
         
         ticker = yf.Ticker(symbol)
@@ -226,7 +229,7 @@ def analyze_market(df, symbol):
     is_prev_green = close_prev > open_prev
     is_curr_red = close_curr < open_curr
     red_move_pct = (high_curr - close_curr) / high_curr if high_curr != 0 else 0
-    is_engulfing_bear = (open_curr >= close_prev) and (close_close < open_prev if 'close_close' in locals() else close_curr < open_prev)
+    is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
     
     bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
@@ -291,13 +294,13 @@ def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
     send_telegram_message(
         f"🚀 *Macro Watchlist Engine Online* 🚀\n"
-        f"• Monitoring designated bot feed via yfinance.\n"
+        f"• Monitoring dedicated bot feed via yfinance.\n"
         f"• Active watchlist assets: {len(ACTIVE_SYMBOLS)} (BTC, ETH, GOLD)"
     )
     
     while True:
         try:
-            # Macro markets (Crypto) run 24/7/365, so we bypass traditional local stock market session hour constraints
+            # Macro markets run 24/7/365, so we bypass traditional stock session parameters
             for symbol in ACTIVE_SYMBOLS:
                 for tf in TIMEFRAMES:
                     df = fetch_candles(symbol, tf)
