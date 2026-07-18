@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & COINBASE-TELEGRAM-TRADINGVIEW CORE ENGINE ACTIVE 24/7", 200
+    return "Bot Matrix Status: ONLINE & MULTI-ASSET-CORE ENGINE ACTIVE 24/7", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -34,9 +34,9 @@ def run_web_server():
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Coinbase API standardizes product symbols with hyphens (e.g., BTC-USD)
-SYMBOLS = ["BTC-USD", "ETH-USD"] 
-TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
+# Crypto assets route via Coinbase Exchange, XAU-USD routes via Yahoo Finance API Pipeline
+SYMBOLS = ["BTC-USD", "ETH-USD", "XAU-USD"] 
+TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
@@ -86,60 +86,113 @@ def resample_to_4h(df_1h):
         return None
 
 # ==========================================
-# COINBASE PUBLIC EXCHANGE DATA PIPELINE
+# MULTI-EXCHANGE DATA PIPELINE (COINBASE & YAHOO FINANCE)
 # ==========================================
 def fetch_candles(symbol, timeframe, limit=150):
     try:
-        # Step A: Map out timeframes to Coinbase granularity (represented in seconds)
-        cb_granularity_map = {
-            "3m": 60,       # Base on 1m candles if 3m isn't native, or fetch next available
-            "5m": 300,      # 5 minutes
-            "15m": 900,     # 15 minutes
-            "1h": 3600,     # 1 hour
-            "4h": 3600,     # Pulled via 1h for resampler consistency
-            "1d": 86400     # 1 day
-        }
-        
-        # Adjust target timeframe to fetch raw data for the 4h math engine
-        target_tf = "1h" if timeframe == "4h" else timeframe
-        granularity = cb_granularity_map.get(target_tf, 300)
-        
-        # Step B: Query Public API (No authentication keys required)
-        url = f"https://api.exchange.coinbase.com/products/{symbol}/candles"
-        params = {"granularity": granularity}
-        
-        headers = {"User-Agent": "CryptoAlertBot/1.0"}
-        response = requests.get(url, params=params, headers=headers)
-        
-        if response.status_code != 200:
-            return None
+        # ----------------------------------------------------
+        # 🪙 GOLD FEED PIPELINE (YAHOO FINANCE)
+        # ----------------------------------------------------
+        if symbol == "XAU-USD":
+            yf_interval_map = {
+                "3m": "1m",   # Resampled below since 3m isn't native to YF
+                "5m": "5m",
+                "15m": "15m",
+                "1h": "60m",
+                "4h": "60m",  # Driven through the 4h math resampler
+                "1d": "1d"
+            }
+            interval = yf_interval_map.get(timeframe, "5m")
             
-        data = response.json() # Returns a list of arrays: [time, low, high, open, close, volume]
-        if not data:
-            return None
+            # Dynamic range to minimize bandwidth and fit rate constraints
+            range_param = "1d" if interval in ["1m", "5m"] else "5d" if interval == "15m" else "60d"
             
-        # Step C: Parse data array into Structured Dataframe
-        df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
-        
-        # Coinbase API returns data ordered from newest to oldest; reverse it for technical analysis
-        df = df.iloc[::-1].reset_index(drop=True)
-        
-        # Convert raw unix time to standard datetime format
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-        
-        # Execute 4h math layer if targeted
-        if timeframe == "4h":
-            df = resample_to_4h(df)
-            if df is None:
+            url = f"https://query1.financeapp.yahoo.com/v8/finance/chart/XAUUSD=X"
+            params = {"interval": interval, "range": range_param}
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            
+            response = requests.get(url, params=params, headers=headers)
+            if response.status_code != 200:
                 return None
-        
-        # Force float parameters across the data array
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = df[col].astype(float)
+                
+            res = response.json().get("chart", {}).get("result", [None])[0]
+            if not res:
+                return None
+                
+            timestamps = res.get("timestamp", [])
+            quote = res.get("indicators", {}).get("quote", [{}])[0]
             
-        return df.tail(limit).copy()
+            df = pd.DataFrame({
+                'timestamp': timestamps,
+                'low': quote.get('low', []),
+                'high': quote.get('high', []),
+                'open': quote.get('open', []),
+                'close': quote.get('close', []),
+                'volume': quote.get('volume', [0] * len(timestamps))
+            })
+            
+            df = df.dropna(subset=['close']).reset_index(drop=True)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            
+            # Formulate the custom 3m timeframe if requested
+            if timeframe == "3m":
+                df = df.set_index('timestamp').resample('3min').agg({
+                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                }).dropna().reset_index()
+                
+            # Execute 4h math layer if targeted
+            if timeframe == "4h":
+                df = resample_to_4h(df)
+                if df is None: return None
+                
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = df[col].astype(float)
+                
+            return df.tail(limit).copy()
+
+        # ----------------------------------------------------
+        # 🚀 CRYPTO FEED PIPELINE (COINBASE)
+        # ----------------------------------------------------
+        else:
+            cb_granularity_map = {
+                "3m": 60,
+                "5m": 300,
+                "15m": 900,
+                "1h": 3600,
+                "4h": 3600,
+                "1d": 86400
+            }
+            
+            target_tf = "1h" if timeframe == "4h" else timeframe
+            granularity = cb_granularity_map.get(target_tf, 300)
+            
+            url = f"https://api.exchange.coinbase.com/products/{symbol}/candles"
+            params = {"granularity": granularity}
+            headers = {"User-Agent": "CryptoAlertBot/1.0"}
+            
+            response = requests.get(url, params=params, headers=headers)
+            if response.status_code != 200:
+                return None
+                
+            data = response.json()
+            if not data:
+                return None
+                
+            df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
+            df = df.iloc[::-1].reset_index(drop=True)
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            
+            if timeframe == "4h":
+                df = resample_to_4h(df)
+                if df is None: return None
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = df[col].astype(float)
+                
+            return df.tail(limit).copy()
+            
     except Exception as e:
-        print(f"Coinbase Engine Error for {symbol} ({timeframe}): {e}")
+        print(f"Data Pipeline Engine Error for {symbol} ({timeframe}): {e}")
         return None
 
 # ==========================================
@@ -155,14 +208,17 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
         
     alert_state_cache[live_tracking_key] = True
     
-    # Generate clean layout metrics for display
-    clean_symbol = symbol.replace("-", "") # Format BTC-USD to BTCUSD for links
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
-    # 🔗 BUILD TRADINGVIEW DEEP LINK PROTOCOLS
-    # This constructs deep links targeting the Coinbase specific spot layout on TradingView
-    tv_chart_url = f"https://www.tradingview.com/chart/?symbol=COINBASE:{clean_symbol}"
-    
+    # 🔗 ENVIRONMENT CORRECTION FOR DEEP LINKS
+    if symbol == "XAU-USD":
+        tv_chart_url = "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD"
+        feed_label = "OANDA Spot Feed"
+    else:
+        clean_symbol = symbol.replace("-", "")
+        tv_chart_url = f"https://www.tradingview.com/chart/?symbol=COINBASE:{clean_symbol}"
+        feed_label = "Coinbase Spot Feed"
+        
     if "Support" in alert_type or "Bull" in alert_type:
         header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢"
     else:
@@ -170,7 +226,7 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     
     tg_message = (
         f"{header}\n\n"
-        f"• *Asset:* [{symbol}]({tv_chart_url}) (Coinbase Spot Feed)\n"
+        f"• *Asset:* [{symbol}]({tv_chart_url}) ({feed_label})\n"
         f"• *Price:* `{price_str}`\n"
         f"• *Timeframe:* [{timeframe.upper()}]({tv_chart_url})\n"
         f"• *Signal:* `{alert_type}`\n"
@@ -186,9 +242,7 @@ def analyze_market(df, symbol):
     
     tf = df.timeframe_meta
     
-    # ----------------------------------------------------
     # 🛡️ NO-REPAINT BOUNDARY LAYER RULES (ILOC[-2])
-    # ----------------------------------------------------
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
     
@@ -277,8 +331,8 @@ def analyze_market(df, symbol):
 # RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"Resampled Macro Asset Matrix Processing Engine Online via Coinbase API...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Coinbase API Spot pairs 24/7. TradingView Cross-Links operational.")
+    print(f"Resampled Macro Asset Matrix Processing Engine Online...")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold Assets 24/7. Multi-Exchange pipelines operational.")
     
     while True:
         try:
@@ -289,7 +343,7 @@ def core_market_scanner_loop():
                         df.timeframe_meta = tf
                         analyze_market(df, symbol)
                     
-                    # Small rest gap to respect Coinbase API public rate-limiting limits
+                    # Small rest gap to respect public endpoint rate-limiting thresholds
                     time.sleep(1.5)
                         
             time.sleep(15)
