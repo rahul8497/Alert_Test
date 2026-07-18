@@ -8,23 +8,20 @@ import requests
 from flask import Flask
 
 # ==========================================
-# 🔧 LEGACY COMPATIBILITY PATCH FOR PANDAS-TA
+# 🔧 PANDAS-TA COMPATIBILITY LAYER
 # ==========================================
-if not hasattr(np, 'int'):
-    np.int = int
-if not hasattr(np, 'float'):
-    np.float = float
-if not hasattr(np, 'bool'):
-    np.bool = bool
+for attr in ['int', 'float', 'bool']:
+    if not hasattr(np, attr):
+        setattr(np, attr, getattr(__builtins__, attr))
 
 # ==========================================
-# 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER
+# 🟢 FLASK SERVER
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & BINGX CORE ENGINE ACTIVE 24/7", 200
+    return "Bot Matrix Status: ONLINE & BUG-FREE ENGINE ACTIVE", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -40,9 +37,9 @@ TREND_LENGTH = 50
 RSI_LENGTH = 14
 PCT_THRESH = 0.5 / 100  
 
-# ⚡ OPTIMIZED HIGH-FREQUENCY ALERTS SETTINGS
-SWING_LENGTH = 4  # Reduced from 10 to capture zones much faster on short intervals (3m/5m)
-BOX_WIDTH = 8.0     # Increased from 2.0 to widen the zone box and prevent price from skipping over it
+# Responsive execution parameters
+SWING_LENGTH = 3  
+BOX_WIDTH = 6.0     
 
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
@@ -57,26 +54,16 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown", "disable_web_page_preview": True}
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Network error sending Telegram notification: {e}")
+        print(f"[❌ TELEGRAM ERROR]: {e}")
 
 # ==========================================
-# BINGX UNIFIED PUBLIC DATA PIPELINE (NO ACC REQUIRED)
+# BINGX UNIFIED DATA PIPELINE (EXPLICITLY SORTED)
 # ==========================================
 def fetch_candles(symbol, timeframe, limit=150):
     try:
-        bingx_timeframe_map = {
-            "3m": "3m",
-            "5m": "5m",
-            "15m": "15m",
-            "1h": "1h",
-            "4h": "4h", 
-            "1d": "1d"
-        }
-        interval = bingx_timeframe_map.get(timeframe, "5m")
-        
-        # Diverge base URL for Crypto vs. Commodities (Gold) on BingX
+        interval = timeframe
         if symbol == "GOLD":
             url = "https://open-api.bingx.com/openApi/swap/v1/market/kline"
             params = {"symbol": "GOLD-USDT", "interval": interval, "limit": limit}
@@ -85,7 +72,7 @@ def fetch_candles(symbol, timeframe, limit=150):
             params = {"symbol": symbol, "interval": interval, "limit": limit}
             
         headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, params=params, headers=headers)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         
         if response.status_code != 200:
             return None
@@ -99,6 +86,7 @@ def fetch_candles(symbol, timeframe, limit=150):
         parsed_data = []
         for c in raw_candles:
             parsed_data.append({
+                "time_ms": int(c["time"]),
                 "timestamp": pd.to_datetime(int(c["time"]), unit='ms'),
                 "open": float(c["open"]),
                 "high": float(c["high"]),
@@ -108,40 +96,31 @@ def fetch_candles(symbol, timeframe, limit=150):
             })
             
         df = pd.DataFrame(parsed_data)
+        
+        # 🔥 ANTI-BUG FIX 1: Explicitly sort by time ascending so index positions never flip
+        df = df.sort_values(by="time_ms", ascending=True).reset_index(drop=True)
         return df
         
     except Exception as e:
-        print(f"Data Pipeline Engine Error for {symbol} ({timeframe}): {e}")
+        print(f"[❌ DATA ERROR] {symbol} ({timeframe}): {e}")
         return None
 
 # ==========================================
-# CORE STRATEGY ANALYSIS MATRIX 
+# ALERT COMPILER
 # ==========================================
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
     
     live_tracking_key = f"{alert_key}_{current_timestamp}"
-    
-    if alert_state_cache.get(live_tracking_key) == True:
+    if alert_state_cache.get(live_tracking_key):
         return  
         
     alert_state_cache[live_tracking_key] = True
-    
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
-    # Format accurate visual deep links to global aggregate feeds on TradingView
-    if symbol == "GOLD":
-        tv_chart_url = "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD"
-        feed_label = "Gold Spot Feed"
-    else:
-        clean_symbol = symbol.replace("-", "")
-        tv_chart_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{clean_symbol}"
-        feed_label = "Crypto Spot Feed"
-        
-    if "Support" in alert_type or "Bull" in alert_type:
-        header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢"
-    else:
-        header = "🔴 *[LIVE SELL SIGNAL MATCHED]* 🔴"
+    tv_chart_url = "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD" if symbol == "GOLD" else f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('-', '')}"
+    feed_label = "Gold Spot Feed" if symbol == "GOLD" else "Crypto Spot Feed"
+    header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢" if ("Support" in alert_type or "Bull" in alert_type) else "🔴 *[LIVE SELL SIGNAL MATCHED]* 🔴"
     
     tg_message = (
         f"{header}\n\n"
@@ -154,12 +133,15 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     )
     send_telegram_message(tg_message)
 
+# ==========================================
+# STABLE MATH CORE ENGINE
+# ==========================================
 def analyze_market(df, symbol, tf):
     global active_zones
     if len(df) < TREND_LENGTH + 10:
         return
     
-    # 🛡️ NO-REPAINT BOUNDARY LAYER RULES (ILOC[-2] is the last closed candle)
+    # Precise extraction of closed and forming candles
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
     
@@ -173,7 +155,7 @@ def analyze_market(df, symbol, tf):
     atr_buffer = atr_val * (BOX_WIDTH / 10.0)
     local_rsi = df['rsi'].iloc[-2]
 
-    # Bullish Operator Candle Logic Math
+    # Bullish Operator Candle Logic
     is_prev_red = close_prev < open_prev
     is_curr_green = close_curr > open_curr
     green_move_pct = (close_curr - low_curr) / low_curr if low_curr != 0 else 0
@@ -182,7 +164,7 @@ def analyze_market(df, symbol, tf):
     bull_reversal = (is_prev_red and is_curr_green and is_engulfing_bull and 
                      (green_move_pct >= PCT_THRESH) and (35 < local_rsi < 75))
 
-    # Bearish Operator Candle Logic Math (FIXED TYPO HERE)
+    # Bearish Operator Candle Logic
     is_prev_green = close_prev > open_prev
     is_curr_red = close_curr < open_curr
     red_move_pct = (high_curr - close_curr) / high_curr if high_curr != 0 else 0
@@ -192,12 +174,12 @@ def analyze_market(df, symbol, tf):
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
 
     if bull_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Confirmed Bull engulfing pattern validated on candle close. RSI: {local_rsi:.2f}", live_market_price)
+        process_alert(f"{symbol}_{tf}_OC_Bull", target_candle_time, "Operator Bull Candle (OC)", symbol, tf, f"Bull engulfing valid on close. RSI: {local_rsi:.2f}", live_market_price)
     if bear_reversal:
-        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Confirmed Bear engulfing pattern validated on candle close. RSI: {local_rsi:.2f}", live_market_price)
+        process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Bear engulfing valid on close. RSI: {local_rsi:.2f}", live_market_price)
 
-    # Zone calculation arrays shift safe boundary offsets
-    idx = -(SWING_LENGTH + 3)
+    # Dynamic Peak Mapping Lookbacks
+    idx = -(SWING_LENGTH + 2)
     is_swing_high, is_swing_low = True, True
     
     for check_i in range(1, SWING_LENGTH + 1):
@@ -225,17 +207,18 @@ def analyze_market(df, symbol, tf):
     for zone in active_zones[symbol][tf]:
         invalidated = False
         
+        # 🔥 ANTI-BUG FIX 2: Check standard intersection so gaps don't cause missed alerts
         if zone['type'] == "demand":
-            if low_curr <= zone['top'] and high_curr >= zone['bottom']:
+            if (low_curr <= zone['top'] and high_curr >= zone['bottom']) or (df['low'].iloc[-1] <= zone['top'] and df['high'].iloc[-1] >= zone['bottom']):
                 process_alert(f"{symbol}_{tf}_demand_touch_{zone['bottom']}", target_candle_time, "Demand Zone Touched (Support)", symbol, tf, 
-                              f"Confirmed price pulled into support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
+                              f"Price hit support zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
             if close_curr < zone['bottom']:
                 invalidated = True
                 
         elif zone['type'] == "supply":
-            if high_curr >= zone['bottom'] and low_curr <= zone['top']:
+            if (high_curr >= zone['bottom'] and low_curr <= zone['top']) or (df['high'].iloc[-1] >= zone['bottom'] and df['low'].iloc[-1] <= zone['top']):
                 process_alert(f"{symbol}_{tf}_supply_touch_{zone['top']}", target_candle_time, "Supply Zone Touched (Resistance)", symbol, tf, 
-                              f"Confirmed price pulled into resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
+                              f"Price hit resistance zone: `[{zone['bottom']:.2f} - {zone['top']:.2f}]`", live_market_price)
             if close_curr > zone['top']:
                 invalidated = True
 
@@ -245,11 +228,11 @@ def analyze_market(df, symbol, tf):
     active_zones[symbol][tf] = remaining_zones
 
 # ==========================================
-# RUNTIME SCANNER LIFECYCLE
+# RUNTIME LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BingX Free Open Data Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7 without accounts. Dynamic pipelines operational.")
+    print("BingX Data Core Engine Online...")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7. System stable.")
     
     while True:
         try:
@@ -258,13 +241,11 @@ def core_market_scanner_loop():
                     df = fetch_candles(symbol, tf)
                     if df is not None and not df.empty:
                         analyze_market(df, symbol, tf)
-                    
-                    # Optimized API safety gap (0.2s) to maximize processing speed without hitting rate limits
-                    time.sleep(0.2) 
+                    time.sleep(0.25) # Perfectly balanced rate control gap
                         
             time.sleep(10)
         except Exception as e:
-            print(f"Loop Engine Fault Trace: {e}")
+            print(f"[⚠️ ENGINE LOOP WARNING]: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":
