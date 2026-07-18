@@ -1,7 +1,6 @@
 import time
 import threading
 import os
-import datetime
 import pandas as pd
 import pandas_ta as ta
 import numpy as np
@@ -19,13 +18,13 @@ if not hasattr(np, 'bool'):
     np.bool = bool
 
 # ==========================================
-# 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER FREE TIER
+# 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER
 # ==========================================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE & MULTI-ASSET-CORE ENGINE ACTIVE 24/7", 200
+    return "Bot Matrix Status: ONLINE & BINGX CORE ENGINE ACTIVE 24/7", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -34,9 +33,8 @@ def run_web_server():
 # ==========================================
 # CONFIGURATION & PARAMETERS
 # ==========================================
-# Crypto assets route via Coinbase Exchange, XAU-USD routes via Yahoo Finance API Pipeline
-SYMBOLS = ["BTC-USD", "ETH-USD", "XAU-USD"] 
-TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"]
+SYMBOLS = ["BTC-USDT", "ETH-USDT", "GOLD"] 
+TIMEFRAMES = ["3m", "5m", "15m", "1h", "4h", "1d"]
 
 TREND_LENGTH = 50
 RSI_LENGTH = 14
@@ -51,7 +49,7 @@ active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in SYMBOLS}
 alert_state_cache = {}
 
 # ==========================================
-# TELEGRAM DISPATCH PIPELINE WITH TRADINGVIEW ENHANCEMENTS
+# TELEGRAM DISPATCH PIPELINE 
 # ==========================================
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -62,141 +60,60 @@ def send_telegram_message(message):
         print(f"Network error sending Telegram notification: {e}")
 
 # ==========================================
-# MATHEMATICAL RESAMPLING ENGINE FOR 4H ALIGNMENT
-# ==========================================
-def resample_to_4h(df_1h):
-    try:
-        if df_1h is None or df_1h.empty:
-            return None
-            
-        df_1h = df_1h.set_index('timestamp')
-        resample_rules = {
-            'open': 'first',
-            'high': 'max',
-            'low': 'min',
-            'close': 'last',
-            'volume': 'sum'
-        }
-        
-        df_4h = df_1h.resample('4h', closed='left', label='left').agg(resample_rules)
-        df_4h = df_4h.dropna(subset=['close']).reset_index()
-        return df_4h
-    except Exception as e:
-        print(f"Mathematical resampling error: {e}")
-        return None
-
-# ==========================================
-# MULTI-EXCHANGE DATA PIPELINE (COINBASE & YAHOO FINANCE)
+# BINGX UNIFIED PUBLIC DATA PIPELINE (NO ACC REQUIRED)
 # ==========================================
 def fetch_candles(symbol, timeframe, limit=150):
     try:
-        # ----------------------------------------------------
-        # 🪙 GOLD FEED PIPELINE (YAHOO FINANCE)
-        # ----------------------------------------------------
-        if symbol == "XAU-USD":
-            yf_interval_map = {
-                "3m": "1m",   # Resampled below since 3m isn't native to YF
-                "5m": "5m",
-                "15m": "15m",
-                "1h": "60m",
-                "4h": "60m",  # Driven through the 4h math resampler
-                "1d": "1d"
-            }
-            interval = yf_interval_map.get(timeframe, "5m")
+        bingx_timeframe_map = {
+            "3m": "3m",
+            "5m": "5m",
+            "15m": "15m",
+            "1h": "1h",
+            "4h": "4h", 
+            "1d": "1d"
+        }
+        interval = bingx_timeframe_map.get(timeframe, "5m")
+        
+        # Diverge base URL for Crypto vs. Commodities (Gold) on BingX
+        if symbol == "GOLD":
+            url = "https://open-api.bingx.com/openApi/swap/v1/market/kline"
+            params = {"symbol": "GOLD-USDT", "interval": interval, "limit": limit}
+        else:
+            url = "https://open-api.bingx.com/openApi/swap/v3/market/kline"
+            params = {"symbol": symbol, "interval": interval, "limit": limit}
             
-            # Dynamic range to minimize bandwidth and fit rate constraints
-            range_param = "1d" if interval in ["1m", "5m"] else "5d" if interval == "15m" else "60d"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, params=params, headers=headers)
+        
+        if response.status_code != 200:
+            return None
             
-            url = f"https://query1.financeapp.yahoo.com/v8/finance/chart/XAUUSD=X"
-            params = {"interval": interval, "range": range_param}
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        res_data = response.json()
+        raw_candles = res_data.get("data", [])
+        
+        if not raw_candles:
+            return None
             
-            response = requests.get(url, params=params, headers=headers)
-            if response.status_code != 200:
-                return None
-                
-            res = response.json().get("chart", {}).get("result", [None])[0]
-            if not res:
-                return None
-                
-            timestamps = res.get("timestamp", [])
-            quote = res.get("indicators", {}).get("quote", [{}])[0]
-            
-            df = pd.DataFrame({
-                'timestamp': timestamps,
-                'low': quote.get('low', []),
-                'high': quote.get('high', []),
-                'open': quote.get('open', []),
-                'close': quote.get('close', []),
-                'volume': quote.get('volume', [0] * len(timestamps))
+        parsed_data = []
+        for c in raw_candles:
+            parsed_data.append({
+                "timestamp": pd.to_datetime(int(c["time"]), unit='ms'),
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+                "volume": float(c["volume"])
             })
             
-            df = df.dropna(subset=['close']).reset_index(drop=True)
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            
-            # Formulate the custom 3m timeframe if requested
-            if timeframe == "3m":
-                df = df.set_index('timestamp').resample('3min').agg({
-                    'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
-                }).dropna().reset_index()
-                
-            # Execute 4h math layer if targeted
-            if timeframe == "4h":
-                df = resample_to_4h(df)
-                if df is None: return None
-                
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = df[col].astype(float)
-                
-            return df.tail(limit).copy()
-
-        # ----------------------------------------------------
-        # 🚀 CRYPTO FEED PIPELINE (COINBASE)
-        # ----------------------------------------------------
-        else:
-            cb_granularity_map = {
-                "3m": 60,
-                "5m": 300,
-                "15m": 900,
-                "1h": 3600,
-                "4h": 3600,
-                "1d": 86400
-            }
-            
-            target_tf = "1h" if timeframe == "4h" else timeframe
-            granularity = cb_granularity_map.get(target_tf, 300)
-            
-            url = f"https://api.exchange.coinbase.com/products/{symbol}/candles"
-            params = {"granularity": granularity}
-            headers = {"User-Agent": "CryptoAlertBot/1.0"}
-            
-            response = requests.get(url, params=params, headers=headers)
-            if response.status_code != 200:
-                return None
-                
-            data = response.json()
-            if not data:
-                return None
-                
-            df = pd.DataFrame(data, columns=['timestamp', 'low', 'high', 'open', 'close', 'volume'])
-            df = df.iloc[::-1].reset_index(drop=True)
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            
-            if timeframe == "4h":
-                df = resample_to_4h(df)
-                if df is None: return None
-            
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = df[col].astype(float)
-                
-            return df.tail(limit).copy()
-            
+        df = pd.DataFrame(parsed_data)
+        return df
+        
     except Exception as e:
         print(f"Data Pipeline Engine Error for {symbol} ({timeframe}): {e}")
         return None
 
 # ==========================================
-# CORE STRATEGY ANALYSIS MATRIX (NO-REPAINT MODE)
+# CORE STRATEGY ANALYSIS MATRIX 
 # ==========================================
 def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
     global alert_state_cache
@@ -210,14 +127,14 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
-    # 🔗 ENVIRONMENT CORRECTION FOR DEEP LINKS
-    if symbol == "XAU-USD":
+    # Format accurate visual deep links to global aggregate feeds on TradingView
+    if symbol == "GOLD":
         tv_chart_url = "https://www.tradingview.com/chart/?symbol=OANDA:XAUUSD"
-        feed_label = "OANDA Spot Feed"
+        feed_label = "Gold Spot Feed"
     else:
         clean_symbol = symbol.replace("-", "")
-        tv_chart_url = f"https://www.tradingview.com/chart/?symbol=COINBASE:{clean_symbol}"
-        feed_label = "Coinbase Spot Feed"
+        tv_chart_url = f"https://www.tradingview.com/chart/?symbol=BINANCE:{clean_symbol}"
+        feed_label = "Crypto Spot Feed"
         
     if "Support" in alert_type or "Bull" in alert_type:
         header = "🟢 *[LIVE BUY SIGNAL MATCHED]* 🟢"
@@ -242,7 +159,7 @@ def analyze_market(df, symbol):
     
     tf = df.timeframe_meta
     
-    # 🛡️ NO-REPAINT BOUNDARY LAYER RULES (ILOC[-2])
+    # 🛡️ NO-REPAINT BOUNDARY LAYER RULES (ILOC[-2] is the last closed candle)
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
     
@@ -269,7 +186,7 @@ def analyze_market(df, symbol):
     is_prev_green = close_prev > open_prev
     is_curr_red = close_curr < open_curr
     red_move_pct = (high_curr - close_curr) / high_curr if high_curr != 0 else 0
-    is_engulfing_bear = (open_curr >= close_prev) and (close_curr < open_prev)
+    is_engulfing_bear = (open_curr >= close_prev) and (close_closed < open_prev)
     
     bear_reversal = (is_prev_green and is_curr_red and is_engulfing_bear and 
                      (red_move_pct >= PCT_THRESH) and (25 < local_rsi < 65))
@@ -331,8 +248,8 @@ def analyze_market(df, symbol):
 # RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    print(f"Resampled Macro Asset Matrix Processing Engine Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking Crypto & Gold Assets 24/7. Multi-Exchange pipelines operational.")
+    print(f"BingX Free Open Data Engine Online...")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\nTracking BTC, ETH, and GOLD 24/7 without accounts. Dynamic pipelines operational.")
     
     while True:
         try:
@@ -343,8 +260,8 @@ def core_market_scanner_loop():
                         df.timeframe_meta = tf
                         analyze_market(df, symbol)
                     
-                    # Small rest gap to respect public endpoint rate-limiting thresholds
-                    time.sleep(1.5)
+                    # Safe request rate control
+                    time.sleep(1.0) 
                         
             time.sleep(15)
         except Exception as e:
