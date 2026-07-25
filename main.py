@@ -169,7 +169,7 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
-    if "Support" in alert_type or "Bull" in alert_type or "SSL" in alert_type:
+    if "Support" in alert_type or "Bull" in alert_type or "SSL" in alert_type or "Demand" in alert_type:
         header = "🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
     else:
         header = "🔴 *[MACRO SELL SIGNAL MATCHED]* 🔴"
@@ -298,12 +298,14 @@ def analyze_market(df, symbol):
         bottom_edge = top_edge - atr_buffer
         if not any(abs(z['top'] - top_edge) < atr_buffer for z in active_zones[symbol][tf]):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "supply"})
+            process_alert(f"{symbol}_{tf}_POI_Supply_Formed_{top_edge}", str(df['timestamp'].iloc[-1]), "Supply Zone Formed", symbol, tf, f"New Supply (Resistance) formed at `[${bottom_edge:.2f} - ${top_edge:.2f}]`", top_edge)
             
     if is_swing_low:
         bottom_edge = df['low'].iloc[idx]
         top_edge = bottom_edge + atr_buffer
         if not any(abs(z['bottom'] - bottom_edge) < atr_buffer for z in active_zones[symbol][tf]):
             active_zones[symbol][tf].append({"top": top_edge, "bottom": bottom_edge, "type": "demand"})
+            process_alert(f"{symbol}_{tf}_POI_Demand_Formed_{bottom_edge}", str(df['timestamp'].iloc[-1]), "Demand Zone Formed", symbol, tf, f"New Demand (Support) formed at `[${bottom_edge:.2f} - ${top_edge:.2f}]`", bottom_edge)
 
     remaining_zones = []
     for zone in active_zones[symbol][tf]:
@@ -331,7 +333,7 @@ def core_market_scanner_loop():
         f"🚀 *Macro Watchlist Engine Online* 🚀\n"
         f"• Monitoring dedicated bot feed via yfinance.\n"
         f"• Active watchlist assets: {len(ACTIVE_SYMBOLS)}\n"
-        f"• Scanning LDP 100% Zones & POI Levels"
+        f"• Scanning LDP 100% Zones & POI Levels (Formations & Touches)"
     )
     
     while True:
