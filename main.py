@@ -91,8 +91,13 @@ SWING_LENGTH = 10
 BOX_WIDTH = 2.0  
 LDP_LENGTH = 15 # Period for the 100% Liquidity Zones
 
+# NEW: Supertrend & Order Block Config
+ST_LENGTH = 14
+ST_MULT = 3.5
+OB_PIVOT_LEN = 7
+
 active_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in ACTIVE_SYMBOLS}
-ldp_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in ACTIVE_SYMBOLS} # Tracker for 100% lines
+ldp_zones = {symbol: {tf: [] for tf in TIMEFRAMES} for symbol in ACTIVE_SYMBOLS} 
 alert_state_cache = {}
 
 # ==========================================
@@ -187,7 +192,7 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
 def analyze_market(df, symbol):
     global active_zones, ldp_zones
     
-    if len(df) < TREND_LENGTH + max(SWING_LENGTH, LDP_LENGTH) + 5:
+    if len(df) < TREND_LENGTH + max(SWING_LENGTH, LDP_LENGTH, OB_PIVOT_LEN*2) + 5:
         return
     
     tf = df.timeframe_meta
@@ -195,6 +200,19 @@ def analyze_market(df, symbol):
     df['rsi'] = ta.rsi(df['close'], length=RSI_LENGTH)
     df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=50)
 
+    # ---------------------------------------------------------
+    # NEW: 0. ATR Supertrend Calculation (Matches Pine Script)
+    # ---------------------------------------------------------
+    st_df = ta.supertrend(df['high'], df['low'], df['close'], length=ST_LENGTH, multiplier=ST_MULT)
+    if st_df is not None and not st_df.empty:
+        # Dynamically extract direction column based on length/mult
+        st_dir_col = [col for col in st_df.columns if 'SUPERTd' in col][0]
+        df['st_dir'] = st_df[st_dir_col]
+    else:
+        df['st_dir'] = 1 # Fallback
+
+    # ---------------------------------------------------------
+    
     # index alignment for locked-in closed bar evaluation
     close_curr, open_curr, low_curr, high_curr = df['close'].iloc[-2], df['open'].iloc[-2], df['low'].iloc[-2], df['high'].iloc[-2]
     close_prev, open_prev = df['close'].iloc[-3], df['open'].iloc[-3]
@@ -224,8 +242,66 @@ def analyze_market(df, symbol):
         process_alert(f"{symbol}_{tf}_OC_Bear", target_candle_time, "Operator Bear Candle (OC)", symbol, tf, f"Confirmed Bear engulfing pattern validated at candle close. RSI: {local_rsi:.2f}", close_curr)
 
 
+    # --- NEW: Supertrend Core/Glow Flip Alerts ---
+    st_dir_curr = df['st_dir'].iloc[-2]
+    st_dir_prev = df['st_dir'].iloc[-3]
+    
+    st_bull_flip = (st_dir_curr == 1 and st_dir_prev == -1)
+    st_bear_flip = (st_dir_curr == -1 and st_dir_prev == 1)
+    
+    if st_bull_flip:
+        process_alert(f"{symbol}_{tf}_ST_Bull_Glow", target_candle_time, "ATR Supertrend Bullish (Core/Glow)", symbol, tf, f"Bullish Supertrend Reversal activated at ${close_curr:.2f}.", close_curr)
+    if st_bear_flip:
+        process_alert(f"{symbol}_{tf}_ST_Bear_Glow", target_candle_time, "ATR Supertrend Bearish (Core/Glow)", symbol, tf, f"Bearish Supertrend Reversal activated at ${close_curr:.2f}.", close_curr)
+
+
+    # --- NEW: Order Block % Formation Logic ---
+    idx_ob = -(OB_PIVOT_LEN + 2) # Delay by PIVOT_LEN to confirm the swing
+    is_ob_bull, is_ob_bear = True, True
+    
+    # Check Pivot Low (Bullish OB)
+    for i in range(1, OB_PIVOT_LEN + 1):
+        if df['low'].iloc[idx_ob] >= df['low'].iloc[idx_ob - i] or df['low'].iloc[idx_ob] >= df['low'].iloc[idx_ob + i]:
+            is_ob_bull = False
+            break
+            
+    # Check Pivot High (Bearish OB)
+    for i in range(1, OB_PIVOT_LEN + 1):
+        if df['high'].iloc[idx_ob] <= df['high'].iloc[idx_ob - i] or df['high'].iloc[idx_ob] <= df['high'].iloc[idx_ob + i]:
+            is_ob_bear = False
+            break
+            
+    if is_ob_bull or is_ob_bear:
+        buy_vol, sell_vol = 0.0, 0.0
+        buy_range, sell_range = 0.0, 0.0
+        
+        # Calculate volume percentages dynamically over the pivot evaluation window
+        for i in range(-2 - OB_PIVOT_LEN + 1, -1):
+            o, c, v = df['open'].iloc[i], df['close'].iloc[i], df['volume'].iloc[i]
+            body = abs(c - o)
+            if c >= o:
+                buy_vol += v; buy_range += body
+            else:
+                sell_vol += v; sell_range += body
+                
+        total_vol = buy_vol + sell_vol
+        total_range = buy_range + sell_range
+        
+        # Volume fallback math if tick vol is 0
+        buy_pct = (buy_vol / total_vol) if total_vol > 0 else ((buy_range / total_range) if total_range > 0 else 0.5)
+        sell_pct = 1.0 - buy_pct
+        
+        if is_ob_bull:
+            ob_price = df['low'].iloc[idx_ob]
+            process_alert(f"{symbol}_{tf}_OB_Bull_Pct_{ob_price}", target_candle_time, "Bullish OB % Formation", symbol, tf, f"Bullish Order Block Confirmed at pivot low.\nBuy Vol: `{buy_pct*100:.0f}%` / Sell Vol: `{sell_pct*100:.0f}%`", ob_price)
+            
+        if is_ob_bear:
+            ob_price = df['high'].iloc[idx_ob]
+            process_alert(f"{symbol}_{tf}_OB_Bear_Pct_{ob_price}", target_candle_time, "Bearish OB % Formation", symbol, tf, f"Bearish Order Block Confirmed at pivot high.\nSell Vol: `{sell_pct*100:.0f}%` / Buy Vol: `{buy_pct*100:.0f}%`", ob_price)
+
+
     # --- 2. 100% LDP Lines (Buy/Sell Side Liquidity) Creation ---
-    idx_ldp = -(LDP_LENGTH + 2) # Ensure pivot is closed
+    idx_ldp = -(LDP_LENGTH + 2) 
     is_ldp_ph, is_ldp_pl = True, True
     
     for check_i in range(1, LDP_LENGTH + 1):
@@ -245,7 +321,6 @@ def analyze_market(df, symbol):
         pBot = max(df['close'].iloc[idx_ldp], df['open'].iloc[idx_ldp])
         if pHigh - pBot < ldp_atr * 0.1: pBot = pHigh - ldp_atr * 0.1
         
-        # Avoid duplicate overlapping zones
         if not any(max(pBot, z['bottom']) <= min(pHigh, z['top']) for z in ldp_zones[symbol][tf] if z['type'] == 'BSL'):
             ldp_zones[symbol][tf].append({"top": pHigh, "bottom": pBot, "type": "BSL"})
             process_alert(f"{symbol}_{tf}_LDP_BSL_Formed_{pHigh}", str(df['timestamp'].iloc[-1]), "100% Buy-Side Liquidity Formed", symbol, tf, f"Fresh 100% LDP Resistance Zone formed at `[${pBot:.2f} - ${pHigh:.2f}]`", pHigh)
@@ -333,7 +408,7 @@ def core_market_scanner_loop():
         f"🚀 *Macro Watchlist Engine Online* 🚀\n"
         f"• Monitoring dedicated bot feed via yfinance.\n"
         f"• Active watchlist assets: {len(ACTIVE_SYMBOLS)}\n"
-        f"• Scanning LDP 100% Zones & POI Levels (Formations & Touches)"
+        f"• Scanning LDP Zones, OC Candles, OB Formations, and Supertrend Flips."
     )
     
     while True:
