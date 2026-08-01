@@ -83,7 +83,7 @@ ELEPHANT_EDGE_LEVELS = {
     }
 }
 
-alert_state_cache = {} # Used for 1-hour anti-spam cooldown
+alert_state_cache = {} # Used for 5-minute cooldown tracking
 
 # ==========================================
 # TELEGRAM DISPATCH PIPELINE
@@ -102,7 +102,6 @@ def send_telegram_message(message):
 def fetch_candles(symbol, limit=100):
     try:
         ticker = yf.Ticker(symbol)
-        # ⚠️ Increased period to 2d so we have enough candles to calculate a 14-period RSI
         history = ticker.history(period="2d", interval="5m")
         if history.empty: return None
             
@@ -118,18 +117,16 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
     global alert_state_cache
     now = datetime.now(timezone.utc)
     
-    # 🛑 1-HOUR COOLDOWN ANTI-SPAM LOGIC
+    # 🛑 5-MINUTE COOLDOWN ANTI-SPAM LOGIC (300 SECONDS)
     if alert_key in alert_state_cache:
         last_alert_time = alert_state_cache[alert_key]
-        if (now - last_alert_time).total_seconds() < 3600: # 3600 seconds = 1 Hour
+        if (now - last_alert_time).total_seconds() < 300: # 300 seconds = 5 Minutes
             return  
             
     alert_state_cache[alert_key] = now
     
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
-    
-    # Format the RSI to 2 decimal places
     rsi_str = f"{rsi:.2f}" if isinstance(rsi, (int, float)) and not pd.isna(rsi) else "N/A"
     
     if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
@@ -154,9 +151,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
 # ==========================================
 def analyze_market(df, symbol):
-    if len(df) < 15: return # Ensure we have enough data for RSI
+    if len(df) < 15: return
     
-    # 🧮 Calculate RSI
+    # Calculate RSI
     df['rsi'] = ta.rsi(df['close'], length=14)
     
     live_low = df['low'].iloc[-1]
@@ -186,7 +183,7 @@ def analyze_market(df, symbol):
             )
 
     # ==========================================================
-    # 🧮 DYNAMIC GANN LOGIC (EXACT TRADINGVIEW MATCH)
+    # 🧮 DYNAMIC GANN LOGIC
     # ==========================================================
     prev_close = MANUAL_PREV_CLOSES.get(symbol)
     if prev_close:
@@ -216,7 +213,7 @@ def analyze_market(df, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only (5M Cooldown).")
     
     while True:
         try:
