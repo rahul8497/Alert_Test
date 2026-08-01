@@ -45,12 +45,12 @@ STOCK_LIST = ["BTC-USD", "ETH-USD", "XAUT-USD"]
 # 🐘 ELEPHANT EDGE & GANN CONFIGURATION
 # ==========================================
 CUSTOM_ZONES = {
-    "Supply 1": {"top": 65903.60, "bottom": 65640.56},
-    "Supply 2": {"top": 65156.30, "bottom": 64999.83},
-    "Demand 1": {"top": 64392.83, "bottom": 64236.36},
-    "Demand 2": {"top": 63752.10, "bottom": 63489.06}
+    "Supply 1": {"top": 64032.17, "bottom": 63771.13},
+    "Supply 2": {"top": 63290.55, "bottom": 63135.26},
+    "Demand 1": {"top": 62532.31, "bottom": 62377.57},
+    "Demand 2": {"top": 61896.99, "bottom": 61635.95}
 }
-MID_LINE = 64429.00
+MID_LINE = 63535.31
 
 DAILY_CACHE = {} 
 LAST_DAILY_FETCH = None
@@ -97,7 +97,6 @@ ACTIVE_SYMBOLS, DISPLAY_NAMES = filter_and_initialize_symbols()
 # ==========================================
 # TECHNICAL PARAMETERS
 # ==========================================
-# Added "5m" to the array below
 TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"] 
 
 TREND_LENGTH = 50
@@ -154,7 +153,6 @@ def fetch_candles(symbol, timeframe, limit=100):
         yf_tf_map = {"1m": "1m", "3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
         yf_tf = yf_tf_map.get(target_tf, "5m")
         
-        # Updated "5m" and "15m" to fetch 5d to guarantee enough candles for indicators
         period_map = {"1m": "1d", "2m": "1d", "5m": "5d", "15m": "5d", "60m": "7d", "1d": "3mo"}
         fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
         
