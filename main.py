@@ -1,12 +1,12 @@
 import time
 import threading
 import os
-import datetime
 import math
 import pandas as pd
 import numpy as np
 import requests
 import yfinance as yf
+from datetime import datetime, timezone
 from flask import Flask
 
 # ==========================================
@@ -29,13 +29,20 @@ TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
 # ==========================================
-# 📋 WATCHLIST
+# 📋 WATCHLIST & PREV CLOSE SYNC
 # ==========================================
 ACTIVE_SYMBOLS = ["BTC-USD", "ETH-USD", "PAXG-USD"]
 DISPLAY_NAMES = {
     "BTC-USD": "BITCOIN (BTC/USD)",
     "ETH-USD": "ETHEREUM (ETH/USD)",
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
+}
+
+# ⚠️ EXACT VALUES EXTRACTED FROM YOUR TRADINGVIEW CHARTS
+MANUAL_PREV_CLOSES = {
+    "BTC-USD": 62834, 
+    "ETH-USD": 1861,  
+    "PAXG-USD": 4044  
 }
 
 # ==========================================
@@ -65,10 +72,7 @@ ELEPHANT_EDGE_LEVELS = {
     }
 }
 
-DAILY_CACHE = {} 
-LAST_DAILY_FETCH = None
-TIMEFRAMES = ["5m", "15m", "1h", "4h", "1d"] 
-alert_state_cache = {}
+alert_state_cache = {} # Used for 1-hour anti-spam cooldown
 
 # ==========================================
 # TELEGRAM DISPATCH PIPELINE
@@ -84,16 +88,10 @@ def send_telegram_message(message):
 # ==========================================
 # DATA FETCHING PIPELINE
 # ==========================================
-def fetch_candles(symbol, timeframe, limit=100):
+def fetch_candles(symbol, limit=5):
     try:
-        # Note: resample logic removed to speed up fetching since we only strictly need the '5m' timeframe now for static zones
-        yf_tf_map = {"5m": "5m", "15m": "15m", "1h": "60m", "4h": "60m", "1d": "1d"}
-        yf_tf = yf_tf_map.get(timeframe, "5m")
-        period_map = {"5m": "5d", "15m": "5d", "60m": "14d", "1d": "3mo"}
-        fetch_period = period_map.get(yf_tf, "5d")
-        
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period=fetch_period, interval=yf_tf)
+        history = ticker.history(period="1d", interval="5m")
         if history.empty: return None
             
         df = history.reset_index()
@@ -102,20 +100,26 @@ def fetch_candles(symbol, timeframe, limit=100):
     except: return None
 
 # ==========================================
-# CORE ALERT PROCESSOR
+# CORE ALERT PROCESSOR & ANTI-SPAM
 # ==========================================
-def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, message, price=None):
+def process_alert(alert_key, alert_type, symbol, message, price=None):
     global alert_state_cache
-    live_tracking_key = f"{alert_key}_{current_timestamp}"
-    if alert_state_cache.get(live_tracking_key): return  
-    alert_state_cache[live_tracking_key] = True
+    now = datetime.now(timezone.utc)
+    
+    # 🛑 1-HOUR COOLDOWN ANTI-SPAM LOGIC
+    if alert_key in alert_state_cache:
+        last_alert_time = alert_state_cache[alert_key]
+        if (now - last_alert_time).total_seconds() < 3600: # 3600 seconds = 1 Hour
+            return  
+            
+    alert_state_cache[alert_key] = now
     
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
-    if "Demand" in alert_type or "Bull" in alert_type or "Support" in alert_type:
+    if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
         header = f"🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
-    elif "Supply" in alert_type or "Bear" in alert_type or "Resistance" in alert_type:
+    elif "Supply" in alert_type or "Bear" in alert_type:
         header = f"🔴 *[MACRO SELL SIGNAL MATCHED]* 🔴"
     else:
         header = f"🟡 *[MACRO ZONE ALERT MATCHED]* 🟡"
@@ -124,7 +128,7 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
         f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
         f"• *Price:* `{price_str}`\n"
-        f"• *Timeframe:* `{timeframe}`\n"
+        f"• *Timeframe:* `GLOBAL (Live)`\n"
         f"• *Signal:* `{alert_type}`\n"
         f"• *Context:* {message}"
     )
@@ -134,92 +138,70 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
 # ==========================================
 def analyze_market(df, symbol):
-    global DAILY_CACHE
-    if len(df) < 5: return
-    
-    tf = df.timeframe_meta
     live_low = df['low'].iloc[-1]
     live_high = df['high'].iloc[-1]
     live_close = df['close'].iloc[-1]
-    current_timestamp = str(df['timestamp'].iloc[-1])
 
-    # OPTIMIZATION: Only evaluate static zones on the 5m loop to prevent duplicate alerts
-    if tf == "5m":
+    # ==========================================================
+    # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
+    # ==========================================================
+    if symbol in ELEPHANT_EDGE_LEVELS:
+        levels = ELEPHANT_EDGE_LEVELS[symbol]
         
-        # ==========================================================
-        # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
-        # ==========================================================
-        if symbol in ELEPHANT_EDGE_LEVELS:
-            levels = ELEPHANT_EDGE_LEVELS[symbol]
-            
-            # Check Box Zones (Supply 1/2, Demand 1/2)
-            for key, limits in levels.items():
-                if key == "Midline": continue
-                if live_high >= limits["bottom"] and live_low <= limits["top"]:
-                    process_alert(
-                        f"{symbol}_GLOBAL_{key.replace(' ', '_')}_Touch", current_timestamp, f"{key} Tested", symbol, "GLOBAL (Live)", 
-                        f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close
-                    )
-                    
-            # Check Dotted Midline
-            mid_to_check = levels.get("Midline")
-            if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
+        for key, limits in levels.items():
+            if key == "Midline": continue
+            if live_high >= limits["bottom"] and live_low <= limits["top"]:
                 process_alert(
-                    f"{symbol}_GLOBAL_Midline_Touch", current_timestamp, "Elephant Edge Midline Tested", symbol, "GLOBAL (Live)", 
-                        f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close
+                    f"{symbol}_{key.replace(' ', '_')}_Touch", f"{key} Tested", symbol, 
+                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close
                 )
+                
+        mid_to_check = levels.get("Midline")
+        if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
+            process_alert(
+                f"{symbol}_Midline_Touch", "Elephant Edge Midline Tested", symbol, 
+                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close
+            )
 
-        # ==========================================================
-        # 🧮 DYNAMIC GANN LOGIC
-        # ==========================================================
-        prev_close = DAILY_CACHE.get(symbol)
-        if prev_close:
-            base_sqrt = round(math.sqrt(prev_close))
-            gann_levels = {
-                "Base Level": base_sqrt ** 2, 
-                "Bull +1": (base_sqrt + 1.0) ** 2, 
-                "Bull +2": (base_sqrt + 2.0) ** 2, 
-                "Bull +3": (base_sqrt + 3.0) ** 2,
-                "Bear -1": (base_sqrt - 1.0) ** 2, 
-                "Bear -2": (base_sqrt - 2.0) ** 2, 
-                "Bear -3": (base_sqrt - 3.0) ** 2
-            }
-            
-            # 0.05% buffer for single line touch detection
-            buffer = live_close * 0.0005 
-            
-            for g_name, g_level in gann_levels.items():
-                if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
-                    process_alert(
-                        f"{symbol}_GLOBAL_Gann_{g_name.replace(' ', '_')}", current_timestamp, f"Gann Level Tested", symbol, "GLOBAL (Live)", 
-                        f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close
-                    )
+    # ==========================================================
+    # 🧮 DYNAMIC GANN LOGIC (EXACT TRADINGVIEW MATCH)
+    # ==========================================================
+    prev_close = MANUAL_PREV_CLOSES.get(symbol)
+    if prev_close:
+        base_sqrt = round(math.sqrt(prev_close))
+        gann_levels = {
+            "Base Level": base_sqrt ** 2, 
+            "Bull +1": (base_sqrt + 1.0) ** 2, 
+            "Bull +2": (base_sqrt + 2.0) ** 2, 
+            "Bull +3": (base_sqrt + 3.0) ** 2,
+            "Bear -1": (base_sqrt - 1.0) ** 2, 
+            "Bear -2": (base_sqrt - 2.0) ** 2, 
+            "Bear -3": (base_sqrt - 3.0) ** 2
+        }
+        
+        # 0.01% Tight Precision Buffer
+        buffer = live_close * 0.0001 
+        
+        for g_name, g_level in gann_levels.items():
+            if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
+                process_alert(
+                    f"{symbol}_Gann_{g_name.replace(' ', '_')}", f"Gann Level Tested", symbol, 
+                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close
+                )
 
 # ==========================================
 # RUNTIME SCANNER LIFECYCLE
 # ==========================================
 def core_market_scanner_loop():
-    global LAST_DAILY_FETCH, DAILY_CACHE
     print(f"Global Macro Market Scanner Online...")
     send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only.")
     
     while True:
         try:
-            current_date = datetime.datetime.utcnow().date()
-            if current_date != LAST_DAILY_FETCH:
-                print("Fetching Daily closes for Gann Math...")
-                for symbol in ACTIVE_SYMBOLS:
-                    daily_df = fetch_candles(symbol, "1d", limit=2)
-                    if daily_df is not None and len(daily_df) > 1: DAILY_CACHE[symbol] = daily_df['close'].iloc[-2] 
-                LAST_DAILY_FETCH = current_date
-
             for symbol in ACTIVE_SYMBOLS:
-                # We only need the 5m timeframe for static price levels, but we leave the loop structure in case you expand later
-                for tf in ["5m"]: 
-                    df = fetch_candles(symbol, tf)
-                    if df is not None and not df.empty:
-                        df.timeframe_meta = tf
-                        analyze_market(df, symbol)
+                df = fetch_candles(symbol)
+                if df is not None and not df.empty:
+                    analyze_market(df, symbol)
                         
             time.sleep(15)
         except Exception as e:
