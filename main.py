@@ -86,7 +86,7 @@ ELEPHANT_EDGE_LEVELS = {
     }
 }
 
-alert_state_cache = {} # Used for 5-minute cooldown tracking
+alert_state_cache = {} # Used for anti-spam tracking
 
 # ==========================================
 # DISPATCH PIPELINES (TELEGRAM & MAKE.COM)
@@ -126,10 +126,17 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     global alert_state_cache
     now = datetime.now(timezone.utc)
     
-    # 🛑 5-MINUTE COOLDOWN ANTI-SPAM LOGIC
+    # 🛑 DYNAMIC COOLDOWN ANTI-SPAM LOGIC
+    # Elephant Edge Zones (Supply/Demand) = 4 Hours (14,400 seconds)
+    # Other alerts (Gann / Midline) = 5 Minutes (300 seconds)
+    if "Supply" in alert_type or "Demand" in alert_type:
+        cooldown_seconds = 14400  # 4 Hours Cooldown for Elephant Zones
+    else:
+        cooldown_seconds = 300    # 5 Minutes Cooldown for Gann/Midlines
+    
     if alert_key in alert_state_cache:
         last_alert_time = alert_state_cache[alert_key]
-        if (now - last_alert_time).total_seconds() < 300: # 300 seconds = 5 Minutes
+        if (now - last_alert_time).total_seconds() < cooldown_seconds:
             return  
             
     alert_state_cache[alert_key] = now
@@ -147,7 +154,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     else:
         header = f"🟡 *[MACRO ZONE ALERT MATCHED]* 🟡"
     
-    # 1. Dispatch to Telegram
+    # 1. Dispatch EVERY ALERT to Telegram (100% Free)
     tg_message = (
         f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
@@ -160,15 +167,15 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     )
     send_telegram_message(tg_message)
 
-    # 2. Dispatch to Make.com Webhook (Triggers Twilio SMS)
-    # 🟢 SENDS BOTH 'body' AND 'text' TO PREVENT MISSING KEY ERRORS IN MAKE.COM
-    alert_text = f"TRADING ALERT: {display_name} | Signal: {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str} | RSI(15M): {rsi_15m_str}"
-    
-    sms_payload = {
-        "body": alert_text,
-        "text": alert_text
-    }
-    send_make_webhook(sms_payload)
+    # 2. FILTER FOR MOBILE SMS: Send SMS ONLY for Elephant Edge Zones (Supply / Demand)
+    # Cooldown enforced: Max 1 SMS per zone every 4 hours!
+    if "Supply" in alert_type or "Demand" in alert_type:
+        alert_text = f"ELEPHANT ZONE ALERT: {display_name} | {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str}"
+        sms_payload = {
+            "body": alert_text,
+            "text": alert_text
+        }
+        send_make_webhook(sms_payload)
 
 # ==========================================
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
@@ -256,7 +263,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only (Telegram + Mobile SMS Active).")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• Elephant Zone SMS Cooldown: 4 Hours.")
     
     while True:
         try:
