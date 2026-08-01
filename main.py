@@ -134,9 +134,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
 
     # ==========================================================
-    # 1. TELEGRAM DISPATCH (15-Minute Cooldown for ALL Alerts)
+    # 1. TELEGRAM DISPATCH (1-Hour Cooldown for ALL Alerts)
     # ==========================================================
-    tg_cooldown = 900  # 15 minutes = 900 seconds
+    tg_cooldown = 3600  # 🟢 UPDATED: 1 hour = 3,600 seconds
     send_tg = False
 
     if alert_key not in tg_alert_cache:
@@ -273,7 +273,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• All Telegram Alerts Cooldown: 15 Minutes\n• Elephant Zone SMS Cooldown: 4 Hours.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• All Telegram Alerts Cooldown: 1 Hour\n• Elephant Zone SMS Cooldown: 4 Hours.")
     
     while True:
         try:
