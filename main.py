@@ -99,10 +99,10 @@ def send_telegram_message(message):
 # ==========================================
 # DATA FETCHING PIPELINE
 # ==========================================
-def fetch_candles(symbol, limit=100):
+def fetch_candles(symbol, limit=200):
     try:
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period="2d", interval="5m")
+        history = ticker.history(period="5d", interval="5m")
         if history.empty: return None
             
         df = history.reset_index()
@@ -113,11 +113,11 @@ def fetch_candles(symbol, limit=100):
 # ==========================================
 # CORE ALERT PROCESSOR & ANTI-SPAM
 # ==========================================
-def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
+def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None):
     global alert_state_cache
     now = datetime.now(timezone.utc)
     
-    # 🛑 5-MINUTE COOLDOWN ANTI-SPAM LOGIC (300 SECONDS)
+    # 🛑 5-MINUTE COOLDOWN ANTI-SPAM LOGIC
     if alert_key in alert_state_cache:
         last_alert_time = alert_state_cache[alert_key]
         if (now - last_alert_time).total_seconds() < 300: # 300 seconds = 5 Minutes
@@ -127,7 +127,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
     
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
-    rsi_str = f"{rsi:.2f}" if isinstance(rsi, (int, float)) and not pd.isna(rsi) else "N/A"
+    
+    rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
+    rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
     
     if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
         header = f"🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
@@ -140,7 +142,8 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
         f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
         f"• *Price:* `{price_str}`\n"
-        f"• *RSI (14):* `{rsi_str}`\n"
+        f"• *RSI (5M):* `{rsi_5m_str}`\n"
+        f"• *RSI (15M):* `{rsi_15m_str}`\n"
         f"• *Timeframe:* `GLOBAL (Live)`\n"
         f"• *Signal:* `{alert_type}`\n"
         f"• *Context:* {message}"
@@ -150,16 +153,31 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
 # ==========================================
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
 # ==========================================
-def analyze_market(df, symbol):
-    if len(df) < 15: return
+def analyze_market(df_5m, symbol):
+    if len(df_5m) < 45: return
     
-    # Calculate RSI
-    df['rsi'] = ta.rsi(df['close'], length=14)
+    # 1. Calculate 5M RSI (TradingView RMA Exact Match)
+    df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
-    live_low = df['low'].iloc[-1]
-    live_high = df['high'].iloc[-1]
-    live_close = df['close'].iloc[-1]
-    live_rsi = df['rsi'].iloc[-1]
+    # 2. Resample 5M to 15M to Calculate 15M RSI
+    df_temp = df_5m.copy()
+    df_temp.set_index('timestamp', inplace=True)
+    df_15m = df_temp.resample('15min').agg({
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum'
+    }).dropna()
+    
+    df_15m['rsi_15m'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
+    
+    live_low = df_5m['low'].iloc[-1]
+    live_high = df_5m['high'].iloc[-1]
+    live_close = df_5m['close'].iloc[-1]
+    
+    live_rsi_5m = df_5m['rsi_5m'].iloc[-1]
+    live_rsi_15m = df_15m['rsi_15m'].iloc[-1] if not df_15m.empty else np.nan
 
     # ==========================================================
     # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
@@ -172,14 +190,14 @@ def analyze_market(df, symbol):
             if live_high >= limits["bottom"] and live_low <= limits["top"]:
                 process_alert(
                     f"{symbol}_{key.replace(' ', '_')}_Touch", f"{key} Tested", symbol, 
-                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close, live_rsi
+                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close, live_rsi_5m, live_rsi_15m
                 )
                 
         mid_to_check = levels.get("Midline")
         if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
             process_alert(
                 f"{symbol}_Midline_Touch", "Elephant Edge Midline Tested", symbol, 
-                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close, live_rsi
+                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close, live_rsi_5m, live_rsi_15m
             )
 
     # ==========================================================
@@ -198,14 +216,14 @@ def analyze_market(df, symbol):
             "Bear -3": (base_sqrt - 3.0) ** 2
         }
         
-        # 0.01% Tight Precision Buffer
+        # 0.01% Precision Buffer
         buffer = live_close * 0.0001 
         
         for g_name, g_level in gann_levels.items():
             if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
                 process_alert(
                     f"{symbol}_Gann_{g_name.replace(' ', '_')}", f"Gann Level Tested", symbol, 
-                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close, live_rsi
+                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close, live_rsi_5m, live_rsi_15m
                 )
 
 # ==========================================
@@ -213,7 +231,7 @@ def analyze_market(df, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only (5M Cooldown).")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only (Dual 5M & 15M RSI Sync).")
     
     while True:
         try:
