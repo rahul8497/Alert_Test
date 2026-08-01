@@ -4,10 +4,21 @@ import os
 import math
 import pandas as pd
 import numpy as np
+import pandas_ta as ta
 import requests
 import yfinance as yf
 from datetime import datetime, timezone
 from flask import Flask
+
+# ==========================================
+# 🔧 LEGACY COMPATIBILITY PATCH FOR PANDAS-TA
+# ==========================================
+if not hasattr(np, 'int'):
+    np.int = int
+if not hasattr(np, 'float'):
+    np.float = float
+if not hasattr(np, 'bool'):
+    np.bool = bool
 
 # ==========================================
 # 🟢 FLASK HEARTBEAT WEB SERVER FOR RENDER
@@ -88,10 +99,11 @@ def send_telegram_message(message):
 # ==========================================
 # DATA FETCHING PIPELINE
 # ==========================================
-def fetch_candles(symbol, limit=5):
+def fetch_candles(symbol, limit=100):
     try:
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period="1d", interval="5m")
+        # ⚠️ Increased period to 2d so we have enough candles to calculate a 14-period RSI
+        history = ticker.history(period="2d", interval="5m")
         if history.empty: return None
             
         df = history.reset_index()
@@ -102,7 +114,7 @@ def fetch_candles(symbol, limit=5):
 # ==========================================
 # CORE ALERT PROCESSOR & ANTI-SPAM
 # ==========================================
-def process_alert(alert_key, alert_type, symbol, message, price=None):
+def process_alert(alert_key, alert_type, symbol, message, price=None, rsi=None):
     global alert_state_cache
     now = datetime.now(timezone.utc)
     
@@ -117,6 +129,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None):
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     
+    # Format the RSI to 2 decimal places
+    rsi_str = f"{rsi:.2f}" if isinstance(rsi, (int, float)) and not pd.isna(rsi) else "N/A"
+    
     if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
         header = f"🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
     elif "Supply" in alert_type or "Bear" in alert_type:
@@ -128,6 +143,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None):
         f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
         f"• *Price:* `{price_str}`\n"
+        f"• *RSI (14):* `{rsi_str}`\n"
         f"• *Timeframe:* `GLOBAL (Live)`\n"
         f"• *Signal:* `{alert_type}`\n"
         f"• *Context:* {message}"
@@ -138,9 +154,15 @@ def process_alert(alert_key, alert_type, symbol, message, price=None):
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
 # ==========================================
 def analyze_market(df, symbol):
+    if len(df) < 15: return # Ensure we have enough data for RSI
+    
+    # 🧮 Calculate RSI
+    df['rsi'] = ta.rsi(df['close'], length=14)
+    
     live_low = df['low'].iloc[-1]
     live_high = df['high'].iloc[-1]
     live_close = df['close'].iloc[-1]
+    live_rsi = df['rsi'].iloc[-1]
 
     # ==========================================================
     # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
@@ -153,14 +175,14 @@ def analyze_market(df, symbol):
             if live_high >= limits["bottom"] and live_low <= limits["top"]:
                 process_alert(
                     f"{symbol}_{key.replace(' ', '_')}_Touch", f"{key} Tested", symbol, 
-                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close
+                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close, live_rsi
                 )
                 
         mid_to_check = levels.get("Midline")
         if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
             process_alert(
                 f"{symbol}_Midline_Touch", "Elephant Edge Midline Tested", symbol, 
-                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close
+                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close, live_rsi
             )
 
     # ==========================================================
@@ -186,7 +208,7 @@ def analyze_market(df, symbol):
             if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
                 process_alert(
                     f"{symbol}_Gann_{g_name.replace(' ', '_')}", f"Gann Level Tested", symbol, 
-                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close
+                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close, live_rsi
                 )
 
 # ==========================================
