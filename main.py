@@ -34,10 +34,13 @@ def run_web_server():
     app.run(host='0.0.0.0', port=port)
 
 # ==========================================
-# 🚨 TELEGRAM CREDENTIALS 🚨
+# 🚨 CREDENTIALS & HOOKS 🚨
 # ==========================================
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
+
+# 🔗 YOUR MAKE.COM WEBHOOK URL
+MAKE_WEBHOOK_URL = "https://hook.us2.make.com/03s8sgircuabqlrjvcjusdzsr0bqcg9w"
 
 # ==========================================
 # 📋 WATCHLIST & PREV CLOSE SYNC
@@ -86,7 +89,7 @@ ELEPHANT_EDGE_LEVELS = {
 alert_state_cache = {} # Used for 5-minute cooldown tracking
 
 # ==========================================
-# TELEGRAM DISPATCH PIPELINE
+# DISPATCH PIPELINES (TELEGRAM & MAKE.COM)
 # ==========================================
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -95,6 +98,12 @@ def send_telegram_message(message):
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Network error sending Telegram notification: {e}")
+
+def send_make_webhook(alert_data):
+    try:
+        requests.post(MAKE_WEBHOOK_URL, json=alert_data, timeout=10)
+    except Exception as e:
+        print(f"Network error sending Make Webhook: {e}")
 
 # ==========================================
 # DATA FETCHING PIPELINE
@@ -138,6 +147,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     else:
         header = f"🟡 *[MACRO ZONE ALERT MATCHED]* 🟡"
     
+    # 1. Dispatch to Telegram
     tg_message = (
         f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
@@ -150,13 +160,19 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     )
     send_telegram_message(tg_message)
 
+    # 2. Dispatch to Make.com Webhook (Triggers Twilio SMS)
+    sms_payload = {
+        "text": f"TRADING ALERT: {display_name} | Signal: {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str} | RSI(15M): {rsi_15m_str}"
+    }
+    send_make_webhook(sms_payload)
+
 # ==========================================
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
 # ==========================================
 def analyze_market(df_5m, symbol):
     if len(df_5m) < 45: return
     
-    # 1. Calculate 5M RSI (TradingView RMA Exact Match)
+    # 1. Calculate 5M RSI
     df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
     # 2. Resample 5M to 15M to Calculate 15M RSI
@@ -216,7 +232,6 @@ def analyze_market(df_5m, symbol):
             "Bear -3": (base_sqrt - 3.0) ** 2
         }
         
-        # 0.01% Precision Buffer
         buffer = live_close * 0.0001 
         
         for g_name, g_level in gann_levels.items():
@@ -231,7 +246,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only (Dual 5M & 15M RSI Sync).")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• STRICT MODE: Elephant Edge & Gann Levels Only (Telegram + Mobile SMS Active).")
     
     while True:
         try:
