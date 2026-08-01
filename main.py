@@ -68,7 +68,7 @@ ELEPHANT_EDGE_LEVELS = {
         "Supply 2": {"top": 63290.55, "bottom": 63135.26},
         "Demand 1": {"top": 62532.86, "bottom": 62377.57},
         "Demand 2": {"top": 61896.99, "bottom": 61635.95},
-        "Midline": 63535.31
+        "Midline": 63054.09  # 🟢 UPDATED TO MATCH YOUR CHART MIDLINE LEVEL
     },
     "ETH-USD": {
         "Supply 1": {"top": 1912.00, "bottom": 1900.87},
@@ -161,8 +161,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     send_telegram_message(tg_message)
 
     # 2. Dispatch to Make.com Webhook (Triggers Twilio SMS)
+    # 🟢 CHANGED KEY FROM 'text' TO 'body' TO FIX TWILIO ERROR
     sms_payload = {
-        "text": f"TRADING ALERT: {display_name} | Signal: {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str} | RSI(15M): {rsi_15m_str}"
+        "body": f"TRADING ALERT: {display_name} | Signal: {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str} | RSI(15M): {rsi_15m_str}"
     }
     send_make_webhook(sms_payload)
 
@@ -209,8 +210,11 @@ def analyze_market(df_5m, symbol):
                     f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close, live_rsi_5m, live_rsi_15m
                 )
                 
+        # 🟢 ADDED TOLERANCE BUFFER ($15 FOR BTC) TO PREVENT MISSED MIDLINE TOUCHES
         mid_to_check = levels.get("Midline")
-        if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
+        midline_buffer = 15.0 if symbol == "BTC-USD" else 1.5
+        
+        if mid_to_check and (live_high >= (mid_to_check - midline_buffer)) and (live_low <= (mid_to_check + midline_buffer)):
             process_alert(
                 f"{symbol}_Midline_Touch", "Elephant Edge Midline Tested", symbol, 
                 f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close, live_rsi_5m, live_rsi_15m
@@ -222,8 +226,12 @@ def analyze_market(df_5m, symbol):
     prev_close = MANUAL_PREV_CLOSES.get(symbol)
     if prev_close:
         base_sqrt = round(math.sqrt(prev_close))
+        
+        # 🟢 ADDED EXPLICIT TARGET LEVELS (FT & ST)
         gann_levels = {
             "Base Level": base_sqrt ** 2, 
+            "First Target (FT)": 63069.09 if symbol == "BTC-USD" else (base_sqrt + 0.27) ** 2,
+            "Second Target (ST)": 63135.26 if symbol == "BTC-USD" else (base_sqrt + 0.53) ** 2,
             "Bull +1": (base_sqrt + 1.0) ** 2, 
             "Bull +2": (base_sqrt + 2.0) ** 2, 
             "Bull +3": (base_sqrt + 3.0) ** 2,
@@ -232,12 +240,12 @@ def analyze_market(df_5m, symbol):
             "Bear -3": (base_sqrt - 3.0) ** 2
         }
         
-        buffer = live_close * 0.0001 
+        buffer = live_close * 0.0002 # Slightly expanded tolerance to catch fast touches
         
         for g_name, g_level in gann_levels.items():
             if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
                 process_alert(
-                    f"{symbol}_Gann_{g_name.replace(' ', '_')}", f"Gann Level Tested", symbol, 
+                    f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", f"Gann Level Tested", symbol, 
                     f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close, live_rsi_5m, live_rsi_15m
                 )
 
