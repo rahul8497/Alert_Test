@@ -86,7 +86,9 @@ ELEPHANT_EDGE_LEVELS = {
     }
 }
 
-alert_state_cache = {} # Used for anti-spam tracking
+# Dynamic caches for separate Telegram and SMS cooldown tracking
+tg_alert_cache = {}
+sms_alert_cache = {}
 
 # ==========================================
 # DISPATCH PIPELINES (TELEGRAM & MAKE.COM)
@@ -120,62 +122,70 @@ def fetch_candles(symbol, limit=200):
     except: return None
 
 # ==========================================
-# CORE ALERT PROCESSOR & ANTI-SPAM
+# CORE ALERT PROCESSOR & DUAL ANTI-SPAM
 # ==========================================
 def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None):
-    global alert_state_cache
+    global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
-    
-    # 🛑 DYNAMIC COOLDOWN ANTI-SPAM LOGIC
-    # Elephant Edge Zones (Supply/Demand) = 4 Hours (14,400 seconds)
-    # Other alerts (Gann / Midline) = 5 Minutes (300 seconds)
-    if "Supply" in alert_type or "Demand" in alert_type:
-        cooldown_seconds = 14400  # 4 Hours Cooldown for Elephant Zones
-    else:
-        cooldown_seconds = 300    # 5 Minutes Cooldown for Gann/Midlines
-    
-    if alert_key in alert_state_cache:
-        last_alert_time = alert_state_cache[alert_key]
-        if (now - last_alert_time).total_seconds() < cooldown_seconds:
-            return  
-            
-    alert_state_cache[alert_key] = now
     
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
-    
     rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
-    
-    if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
-        header = f"🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
-    elif "Supply" in alert_type or "Bear" in alert_type:
-        header = f"🔴 *[MACRO SELL SIGNAL MATCHED]* 🔴"
-    else:
-        header = f"🟡 *[MACRO ZONE ALERT MATCHED]* 🟡"
-    
-    # 1. Dispatch EVERY ALERT to Telegram (100% Free)
-    tg_message = (
-        f"{header}\n\n"
-        f"• *Asset:* `{display_name}`\n"
-        f"• *Price:* `{price_str}`\n"
-        f"• *RSI (5M):* `{rsi_5m_str}`\n"
-        f"• *RSI (15M):* `{rsi_15m_str}`\n"
-        f"• *Timeframe:* `GLOBAL (Live)`\n"
-        f"• *Signal:* `{alert_type}`\n"
-        f"• *Context:* {message}"
-    )
-    send_telegram_message(tg_message)
 
-    # 2. FILTER FOR MOBILE SMS: Send SMS ONLY for Elephant Edge Zones (Supply / Demand)
-    # Cooldown enforced: Max 1 SMS per zone every 4 hours!
+    # ==========================================================
+    # 1. TELEGRAM DISPATCH (15-Minute Cooldown for ALL Alerts)
+    # ==========================================================
+    tg_cooldown = 900  # 15 minutes = 900 seconds
+    send_tg = False
+
+    if alert_key not in tg_alert_cache:
+        send_tg = True
+    elif (now - tg_alert_cache[alert_key]).total_seconds() >= tg_cooldown:
+        send_tg = True
+
+    if send_tg:
+        tg_alert_cache[alert_key] = now
+        
+        if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
+            header = f"🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
+        elif "Supply" in alert_type or "Bear" in alert_type:
+            header = f"🔴 *[MACRO SELL SIGNAL MATCHED]* 🔴"
+        else:
+            header = f"🟡 *[MACRO ZONE ALERT MATCHED]* 🟡"
+            
+        tg_message = (
+            f"{header}\n\n"
+            f"• *Asset:* `{display_name}`\n"
+            f"• *Price:* `{price_str}`\n"
+            f"• *RSI (5M):* `{rsi_5m_str}`\n"
+            f"• *RSI (15M):* `{rsi_15m_str}`\n"
+            f"• *Timeframe:* `GLOBAL (Live)`\n"
+            f"• *Signal:* `{alert_type}`\n"
+            f"• *Context:* {message}"
+        )
+        send_telegram_message(tg_message)
+
+    # ==========================================================
+    # 2. MOBILE SMS DISPATCH (Elephant Zones Only + 4 Hours Cooldown)
+    # ==========================================================
     if "Supply" in alert_type or "Demand" in alert_type:
-        alert_text = f"ELEPHANT ZONE ALERT: {display_name} | {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str}"
-        sms_payload = {
-            "body": alert_text,
-            "text": alert_text
-        }
-        send_make_webhook(sms_payload)
+        sms_cooldown = 14400  # 4 hours = 14,400 seconds
+        send_sms = False
+
+        if alert_key not in sms_alert_cache:
+            send_sms = True
+        elif (now - sms_alert_cache[alert_key]).total_seconds() >= sms_cooldown:
+            send_sms = True
+
+        if send_sms:
+            sms_alert_cache[alert_key] = now
+            alert_text = f"ELEPHANT ZONE ALERT: {display_name} | {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str}"
+            sms_payload = {
+                "body": alert_text,
+                "text": alert_text
+            }
+            send_make_webhook(sms_payload)
 
 # ==========================================
 # STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
@@ -220,7 +230,7 @@ def analyze_market(df_5m, symbol):
                     f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close, live_rsi_5m, live_rsi_15m
                 )
                 
-        # Midline with $15 buffer for BTC
+        # Midline touch evaluation
         mid_to_check = levels.get("Midline")
         midline_buffer = 15.0 if symbol == "BTC-USD" else 1.5
         
@@ -263,7 +273,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Scanning Crypto & Gold 24/7\n• Elephant Zone SMS Cooldown: 4 Hours.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• All Telegram Alerts Cooldown: 15 Minutes\n• Elephant Zone SMS Cooldown: 4 Hours.")
     
     while True:
         try:
