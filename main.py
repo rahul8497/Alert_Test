@@ -40,7 +40,7 @@ TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
 # 🔗 YOUR MAKE.COM WEBHOOK URL
-MAKE_WEBHOOK_URL = "https://hook.us2.make.com/03s8sgircuabqlrjvcjusdzsr0bqcg9w"
+MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
 # 📋 WATCHLIST & PREV CLOSE SYNC
