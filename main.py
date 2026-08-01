@@ -82,27 +82,15 @@ def send_telegram_message(message):
         print(f"Network error sending Telegram notification: {e}")
 
 # ==========================================
-# MATHEMATICAL RESAMPLING ENGINE
-# ==========================================
-def resample_to_4h(df_1h):
-    try:
-        if df_1h is None or df_1h.empty: return None
-        df_1h = df_1h.set_index('timestamp')
-        resample_rules = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
-        df_4h = df_1h.resample('4h', closed='left', label='left').agg(resample_rules).dropna(subset=['close']).reset_index()
-        return df_4h
-    except: return None
-
-# ==========================================
 # DATA FETCHING PIPELINE
 # ==========================================
 def fetch_candles(symbol, timeframe, limit=100):
     try:
-        target_tf = "60m" if timeframe == "4h" else timeframe
-        yf_tf_map = {"1m": "1m", "3m": "2m", "5m": "5m", "15m": "15m", "1h": "60m", "1d": "1d"}
-        yf_tf = yf_tf_map.get(target_tf, "15m")
-        period_map = {"1m": "1d", "2m": "1d", "5m": "5d", "15m": "5d", "60m": "14d", "1d": "3mo"}
-        fetch_period = "14d" if timeframe == "4h" else period_map.get(yf_tf, "5d")
+        # Note: resample logic removed to speed up fetching since we only strictly need the '5m' timeframe now for static zones
+        yf_tf_map = {"5m": "5m", "15m": "15m", "1h": "60m", "4h": "60m", "1d": "1d"}
+        yf_tf = yf_tf_map.get(timeframe, "5m")
+        period_map = {"5m": "5d", "15m": "5d", "60m": "14d", "1d": "3mo"}
+        fetch_period = period_map.get(yf_tf, "5d")
         
         ticker = yf.Ticker(symbol)
         history = ticker.history(period=fetch_period, interval=yf_tf)
@@ -110,9 +98,6 @@ def fetch_candles(symbol, timeframe, limit=100):
             
         df = history.reset_index()
         df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
-        if timeframe == "4h":
-            df = resample_to_4h(df)
-            if df is None: return None
         return df.tail(limit).copy()
     except: return None
 
@@ -139,7 +124,7 @@ def process_alert(alert_key, current_timestamp, alert_type, symbol, timeframe, m
         f"{header}\n\n"
         f"• *Asset:* `{display_name}`\n"
         f"• *Price:* `{price_str}`\n"
-        f"• *Timeframe:* `{timeframe.upper()}`\n"
+        f"• *Timeframe:* `{timeframe}`\n"
         f"• *Signal:* `{alert_type}`\n"
         f"• *Context:* {message}"
     )
@@ -158,54 +143,57 @@ def analyze_market(df, symbol):
     live_close = df['close'].iloc[-1]
     current_timestamp = str(df['timestamp'].iloc[-1])
 
-    # ==========================================================
-    # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
-    # ==========================================================
-    if symbol in ELEPHANT_EDGE_LEVELS:
-        levels = ELEPHANT_EDGE_LEVELS[symbol]
+    # OPTIMIZATION: Only evaluate static zones on the 5m loop to prevent duplicate alerts
+    if tf == "5m":
         
-        # Check Box Zones (Supply 1/2, Demand 1/2)
-        for key, limits in levels.items():
-            if key == "Midline": continue
-            if live_high >= limits["bottom"] and live_low <= limits["top"]:
+        # ==========================================================
+        # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
+        # ==========================================================
+        if symbol in ELEPHANT_EDGE_LEVELS:
+            levels = ELEPHANT_EDGE_LEVELS[symbol]
+            
+            # Check Box Zones (Supply 1/2, Demand 1/2)
+            for key, limits in levels.items():
+                if key == "Midline": continue
+                if live_high >= limits["bottom"] and live_low <= limits["top"]:
+                    process_alert(
+                        f"{symbol}_GLOBAL_{key.replace(' ', '_')}_Touch", current_timestamp, f"{key} Tested", symbol, "GLOBAL (Live)", 
+                        f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close
+                    )
+                    
+            # Check Dotted Midline
+            mid_to_check = levels.get("Midline")
+            if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
                 process_alert(
-                    f"{symbol}_{tf}_{key.replace(' ', '_')}_Touch", current_timestamp, f"{key} Tested", symbol, tf, 
-                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close
+                    f"{symbol}_GLOBAL_Midline_Touch", current_timestamp, "Elephant Edge Midline Tested", symbol, "GLOBAL (Live)", 
+                        f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close
                 )
-                
-        # Check Dotted Midline
-        mid_to_check = levels.get("Midline")
-        if mid_to_check and live_high >= mid_to_check and live_low <= mid_to_check:
-            process_alert(
-                f"{symbol}_{tf}_Midline_Touch", current_timestamp, "Elephant Edge Midline Tested", symbol, tf, 
-                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close
-            )
 
-    # ==========================================================
-    # 🧮 DYNAMIC GANN LOGIC
-    # ==========================================================
-    prev_close = DAILY_CACHE.get(symbol)
-    if prev_close:
-        base_sqrt = round(math.sqrt(prev_close))
-        gann_levels = {
-            "Base Level": base_sqrt ** 2, 
-            "Bull +1": (base_sqrt + 1.0) ** 2, 
-            "Bull +2": (base_sqrt + 2.0) ** 2, 
-            "Bull +3": (base_sqrt + 3.0) ** 2,
-            "Bear -1": (base_sqrt - 1.0) ** 2, 
-            "Bear -2": (base_sqrt - 2.0) ** 2, 
-            "Bear -3": (base_sqrt - 3.0) ** 2
-        }
-        
-        # 0.05% buffer for single line touch detection
-        buffer = live_close * 0.0005 
-        
-        for g_name, g_level in gann_levels.items():
-            if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
-                process_alert(
-                    f"{symbol}_{tf}_Gann_{g_name.replace(' ', '_')}", current_timestamp, f"Gann Level Tested", symbol, tf, 
-                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close
-                )
+        # ==========================================================
+        # 🧮 DYNAMIC GANN LOGIC
+        # ==========================================================
+        prev_close = DAILY_CACHE.get(symbol)
+        if prev_close:
+            base_sqrt = round(math.sqrt(prev_close))
+            gann_levels = {
+                "Base Level": base_sqrt ** 2, 
+                "Bull +1": (base_sqrt + 1.0) ** 2, 
+                "Bull +2": (base_sqrt + 2.0) ** 2, 
+                "Bull +3": (base_sqrt + 3.0) ** 2,
+                "Bear -1": (base_sqrt - 1.0) ** 2, 
+                "Bear -2": (base_sqrt - 2.0) ** 2, 
+                "Bear -3": (base_sqrt - 3.0) ** 2
+            }
+            
+            # 0.05% buffer for single line touch detection
+            buffer = live_close * 0.0005 
+            
+            for g_name, g_level in gann_levels.items():
+                if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
+                    process_alert(
+                        f"{symbol}_GLOBAL_Gann_{g_name.replace(' ', '_')}", current_timestamp, f"Gann Level Tested", symbol, "GLOBAL (Live)", 
+                        f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close
+                    )
 
 # ==========================================
 # RUNTIME SCANNER LIFECYCLE
@@ -226,7 +214,8 @@ def core_market_scanner_loop():
                 LAST_DAILY_FETCH = current_date
 
             for symbol in ACTIVE_SYMBOLS:
-                for tf in TIMEFRAMES:
+                # We only need the 5m timeframe for static price levels, but we leave the loop structure in case you expand later
+                for tf in ["5m"]: 
                     df = fetch_candles(symbol, tf)
                     if df is not None and not df.empty:
                         df.timeframe_meta = tf
