@@ -54,9 +54,9 @@ DISPLAY_NAMES = {
 
 # ⚠️ EXACT VALUES EXTRACTED FROM YOUR TRADINGVIEW CHARTS
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 62834, 
-    "ETH-USD": 1861,  
-    "PAXG-USD": 4044  
+    "BTC-USD": 62761, 
+    "ETH-USD": 1843,  
+    "PAXG-USD": 4045  
 }
 
 # ==========================================
@@ -64,25 +64,25 @@ MANUAL_PREV_CLOSES = {
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 1": {"top": 64032.17, "bottom": 63771.13},
-        "Supply 2": {"top": 63290.55, "bottom": 63135.26},
-        "Demand 1": {"top": 62532.86, "bottom": 62377.57},
-        "Demand 2": {"top": 61896.99, "bottom": 61635.95},
-        "Midline": 63054.09
+        "Supply 1": {"top": 63757.00, "bottom": 63732.69},
+        "Supply 2": {"top": 63253.00, "bottom": 63234.46},
+        "Demand 1": {"top": 62501.00, "bottom": 62448.95},
+        "Demand 2": {"top": 61789.73, "bottom": 61519.10},
+        "Midline": 62868.30
     },
     "ETH-USD": {
-        "Supply 1": {"top": 1912.00, "bottom": 1900.87},
-        "Supply 2": {"top": 1880.38, "bottom": 1873.76},
-        "Demand 1": {"top": 1848.08, "bottom": 1841.46},
-        "Demand 2": {"top": 1820.97, "bottom": 1809.84},
-        "Midline": 1881.16
+        "Supply 1": {"top": 1894.74, "bottom": 1883.50},
+        "Supply 2": {"top": 1862.81, "bottom": 1856.13},
+        "Demand 1": {"top": 1830.19, "bottom": 1823.51},
+        "Demand 2": {"top": 1802.82, "bottom": 1791.58},
+        "Midline": 1845.83
     },
     "PAXG-USD": {
-        "Supply 1": {"top": 4092.82, "bottom": 4082.27},
-        "Supply 2": {"top": 4062.84, "bottom": 4056.56},
-        "Demand 1": {"top": 4032.20, "bottom": 4025.92},
-        "Demand 2": {"top": 4006.49, "bottom": 3995.94},
-        "Midline": 4054.00
+        "Supply 1": {"top": 4094.20, "bottom": 4083.46},
+        "Supply 2": {"top": 4063.70, "bottom": 4057.31},
+        "Demand 1": {"top": 4046.44, "bottom": 4041.47},
+        "Demand 2": {"top": 4006.38, "bottom": 3995.64},
+        "Midline": 4048.28
     }
 }
 
