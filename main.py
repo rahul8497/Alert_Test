@@ -37,7 +37,12 @@ def run_web_server():
 # 🚨 CREDENTIALS & HOOKS 🚨
 # ==========================================
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
-TELEGRAM_CHAT_ID = "1136613703"
+
+# 👥 MULTI-TARGET TELEGRAM DISPATCH LIST (Group + Private Backup)
+TELEGRAM_CHAT_IDS = [
+    "-5385748601",  # 📡Signal Telegram Group (Includes you and your friends)
+    "1136613703"    # Your personal Telegram ID (Backup)
+]
 
 # 🔗 MAKE.COM WEBHOOK URL
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
@@ -60,7 +65,7 @@ MANUAL_PREV_CLOSES = {
 }
 
 # ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (EXACT AUG 2 Presets)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (EXACT Aug Presets)
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
@@ -95,11 +100,13 @@ sms_alert_cache = {}
 # ==========================================
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        requests.post(url, json=payload, timeout=10)
-    except Exception as e:
-        print(f"Network error sending Telegram notification: {e}")
+    
+    for chat_id in TELEGRAM_CHAT_IDS:
+        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            print(f"Network error sending Telegram notification to {chat_id}: {e}")
 
 def send_make_webhook(alert_data):
     try:
@@ -119,7 +126,8 @@ def fetch_candles(symbol, limit=200):
         df = history.reset_index()
         df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
         return df.tail(limit).copy()
-    except: return None
+    except Exception as e:
+        return None
 
 # ==========================================
 # CORE ALERT PROCESSOR & DUAL ANTI-SPAM
@@ -271,7 +279,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• All Telegram Alerts Cooldown: 1 Hour\n• Elephant Zone SMS Cooldown: 4 Hours.")
+    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Broadcasting directly to 📡Signal Group\n• Telegram Alerts Cooldown: 1 Hour\n• Elephant Zone SMS Cooldown: 4 Hours.")
     
     while True:
         try:
