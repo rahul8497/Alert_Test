@@ -39,7 +39,7 @@ def run_web_server():
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 TELEGRAM_CHAT_ID = "1136613703"
 
-# 🔗 YOUR MAKE.COM WEBHOOK URL
+# 🔗 MAKE.COM WEBHOOK URL
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
@@ -52,35 +52,35 @@ DISPLAY_NAMES = {
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
 }
 
-# ⚠️ EXACT VALUES EXTRACTED FROM YOUR TRADINGVIEW CHARTS
+# ⚠️ EXACT VALUES MATCHING TRADINGVIEW GANN BASE LEVELS
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 62761, 
-    "ETH-USD": 1843,  
-    "PAXG-USD": 4045  
+    "BTC-USD": 62761,  # Produces Gann Base: 63,001
+    "ETH-USD": 1843,   # Produces Gann Base: 1,849
+    "PAXG-USD": 4045   # Produces Gann Base: 4,097
 }
 
 # ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (PER ASSET)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (EXACT AUG 2 Presets)
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 1": {"top": 63757.00, "bottom": 63732.69},
-        "Supply 2": {"top": 63253.00, "bottom": 63234.46},
-        "Demand 1": {"top": 62501.00, "bottom": 62448.95},
+        "Supply 2": {"top": 64003.32, "bottom": 63732.69},
+        "Supply 1": {"top": 63234.46, "bottom": 63073.47},
+        "Demand 1": {"top": 62448.95, "bottom": 62287.96},
         "Demand 2": {"top": 61789.73, "bottom": 61519.10},
-        "Midline": 62868.30
+        "Midline": 62690.48
     },
     "ETH-USD": {
-        "Supply 1": {"top": 1894.74, "bottom": 1883.50},
-        "Supply 2": {"top": 1862.81, "bottom": 1856.13},
+        "Supply 2": {"top": 1894.74, "bottom": 1883.50},
+        "Supply 1": {"top": 1862.81, "bottom": 1856.13},
         "Demand 1": {"top": 1830.19, "bottom": 1823.51},
         "Demand 2": {"top": 1802.82, "bottom": 1791.58},
         "Midline": 1845.83
     },
     "PAXG-USD": {
-        "Supply 1": {"top": 4094.20, "bottom": 4083.46},
-        "Supply 2": {"top": 4063.70, "bottom": 4057.31},
-        "Demand 1": {"top": 4046.44, "bottom": 4041.47},
+        "Supply 2": {"top": 4094.20, "bottom": 4083.46},
+        "Supply 1": {"top": 4063.70, "bottom": 4057.31},
+        "Demand 1": {"top": 4032.53, "bottom": 4026.14},
         "Demand 2": {"top": 4006.38, "bottom": 3995.64},
         "Midline": 4048.28
     }
@@ -134,9 +134,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
 
     # ==========================================================
-    # 1. TELEGRAM DISPATCH (1-Hour Cooldown for ALL Alerts)
+    # 1. TELEGRAM DISPATCH (1-Hour Cooldown)
     # ==========================================================
-    tg_cooldown = 3600  # 🟢 UPDATED: 1 hour = 3,600 seconds
+    tg_cooldown = 3600  # 1 hour = 3,600 seconds
     send_tg = False
 
     if alert_key not in tg_alert_cache:
@@ -249,8 +249,6 @@ def analyze_market(df_5m, symbol):
         
         gann_levels = {
             "Base Level": base_sqrt ** 2, 
-            "First Target (FT)": 63069.09 if symbol == "BTC-USD" else (base_sqrt + 0.27) ** 2,
-            "Second Target (ST)": 63135.26 if symbol == "BTC-USD" else (base_sqrt + 0.53) ** 2,
             "Bull +1": (base_sqrt + 1.0) ** 2, 
             "Bull +2": (base_sqrt + 2.0) ** 2, 
             "Bull +3": (base_sqrt + 3.0) ** 2,
