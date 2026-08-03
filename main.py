@@ -57,34 +57,35 @@ DISPLAY_NAMES = {
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
 }
 
+# ⚠️ GANN BASE PREVIOUS CLOSES
 MANUAL_PREV_CLOSES = {
     "BTC-USD": 63506,
     "ETH-USD": 1883,
     "PAXG-USD": 4068
 }
 
-# 🐘 UPDATED ELEPHANT EDGE CONFIGURATIONS (MIDLINES UPDATED)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (ALL UPDATED LEVELS)
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
         "Supply 2": {"top": 64755.64, "bottom": 64483.42},
         "Supply 1": {"top": 63982.27, "bottom": 63820.33},
         "Demand 1": {"top": 63192.15, "bottom": 63030.21},
         "Demand 2": {"top": 62529.06, "bottom": 62256.84},
-        "Midline": 63326.90  # Updated Midline
+        "Midline": 63326.90
     },
     "ETH-USD": {
         "Supply 2": {"top": 1935.39, "bottom": 1924.06},
         "Supply 1": {"top": 1903.21, "bottom": 1896.48},
         "Demand 1": {"top": 1870.34, "bottom": 1863.61},
         "Demand 2": {"top": 1842.76, "bottom": 1831.43},
-        "Midline": 1873.94  # Updated Midline
+        "Midline": 1873.94
     },
     "PAXG-USD": {
         "Supply 2": {"top": 4117.11, "bottom": 4106.39},
         "Supply 1": {"top": 4086.65, "bottom": 4080.27},
         "Demand 1": {"top": 4055.53, "bottom": 4049.15},
         "Demand 2": {"top": 4029.41, "bottom": 4018.69},
-        "Midline": 4062.27  # Updated Midline
+        "Midline": 4062.27
     }
 }
 
