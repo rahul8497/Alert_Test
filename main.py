@@ -27,7 +27,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, 15M OC, Zone Touches)", 200
+    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, Operator OC, Elephant Zones)", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -191,71 +191,73 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         send_make_webhook(sms_payload)
 
 # ==========================================
-# SIGNAL 1: 15-MINUTE OC (ELEPHANT) CANDLE
+# SIGNAL 1: OPERATOR CANDLE (OC) EVALUATION
 # ==========================================
-def evaluate_elephant_candle_15m(df_15m, symbol, rsi_5m, rsi_15m):
-    if len(df_15m) < 105:
+def evaluate_operator_oc_candle(df_5m, symbol, rsi_5m, rsi_15m):
+    """
+    Operator Candle (OC) conditions extracted from RG_Media_Latest2:
+    - Min move percentage pct_thresh = 0.5%
+    - Bullish OC: Previous Red, Engulfing Green, 50 < RSI(15M) < 70
+    - Bearish OC: Previous Green, Engulfing Red, 30 < RSI(15M) < 50
+    """
+    if len(df_5m) < 3 or pd.isna(rsi_15m):
         return
 
-    df_15m['ma_fast'] = ta.sma(df_15m['close'], length=8)
-    df_15m['atr'] = ta.atr(df_15m['high'], df_15m['low'], df_15m['close'], length=100)
+    curr = df_5m.iloc[-1]
+    prev = df_5m.iloc[-2]
 
-    curr = df_15m.iloc[-1]
-    prev_atr = df_15m['atr'].iloc[-2]
+    curr_open, curr_close = curr['open'], curr['close']
+    curr_high, curr_low = curr['high'], curr['low']
+    prev_open, prev_close = prev['open'], prev['close']
 
-    open_p = curr['open']
-    close_p = curr['close']
-    high_p = curr['high']
-    low_p = curr['low']
+    pct_thresh = 0.005  # 0.5% Minimum Candle Percentage
 
-    body_size = abs(close_p - open_p)
-    candle_range = abs(high_p - low_p)
+    # Bullish Operator Candle (OC) Condition
+    is_prev_red = prev_close < prev_open
+    is_curr_green = curr_close > curr_open
+    green_move_pct = (curr_close - curr_low) / curr_low if curr_low > 0 else 0
+    is_engulfing_bull = (curr_open <= prev_close) and (curr_close > prev_open)
 
-    if candle_range == 0 or pd.isna(prev_atr):
-        return
+    bull_oc = is_prev_red and is_curr_green and is_engulfing_bull and (green_move_pct >= pct_thresh) and (50.0 < rsi_15m < 70.0)
 
-    body_percentage = (body_size * 100.0) / candle_range
-
-    is_bull = close_p > open_p
-    is_bear = close_p < open_p
-
-    body_valid = body_percentage >= 70.0
-    atr_valid = body_size >= (prev_atr * 1.3)
-
-    fast_ma_rising = df_15m['ma_fast'].iloc[-1] > df_15m['ma_fast'].iloc[-2]
-    fast_ma_falling = df_15m['ma_fast'].iloc[-1] < df_15m['ma_fast'].iloc[-2]
-
-    # Bullish OC Candle Trigger
-    if is_bull and body_valid and atr_valid and fast_ma_rising:
-        alert_key = f"{symbol}_15M_BULL_ELEPHANT_{curr.name}"
+    if bull_oc:
+        alert_key = f"{symbol}_OC_BULL_{curr.name}"
         process_alert(
             alert_key, 
-            "15M Bullish Elephant Candle 🐘", 
+            "Operator Bull OC Candle 🕯️", 
             symbol, 
-            f"15M OC Candle Formed! Body Ratio: `{body_percentage:.1f}%`, Range: `${candle_range:.2f}`", 
-            close_p, rsi_5m, rsi_15m
+            f"Operator Bull Reversal Detected! Move: `{green_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
+            curr_close, rsi_5m, rsi_15m
         )
 
-    # Bearish OC Candle Trigger
-    if is_bear and body_valid and atr_valid and fast_ma_falling:
-        alert_key = f"{symbol}_15M_BEAR_ELEPHANT_{curr.name}"
+    # Bearish Operator Candle (OC) Condition
+    is_prev_green = prev_close > prev_open
+    is_curr_red = curr_close < curr_open
+    red_move_pct = (curr_high - curr_close) / curr_high if curr_high > 0 else 0
+    is_engulfing_bear = (curr_open >= prev_close) and (curr_close < prev_open)
+
+    bear_oc = is_prev_green and is_curr_red and is_engulfing_bear and (red_move_pct >= pct_thresh) and (30.0 < rsi_15m < 50.0)
+
+    if bear_oc:
+        alert_key = f"{symbol}_OC_BEAR_{curr.name}"
         process_alert(
             alert_key, 
-            "15M Bearish Elephant Candle 🐘", 
+            "Operator Bear OC Candle 🕯️", 
             symbol, 
-            f"15M OC Candle Formed! Body Ratio: `{body_percentage:.1f}%`, Range: `${candle_range:.2f}`", 
-            close_p, rsi_5m, rsi_15m
+            f"Operator Bear Reversal Detected! Move: `{red_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
+            curr_close, rsi_5m, rsi_15m
         )
 
 # ==========================================
-# MAIN SCANNER ROUTINE (3 SIGNALS ONLY)
+# MAIN SCANNER ROUTINE (ALIGNMENT ENGINE)
 # ==========================================
 def analyze_market(df_5m, symbol):
     if len(df_5m) < 45: return
     
-    # Calculate RSI
+    # Calculate 5M RSI
     df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
+    # Calculate 15M RSI for OC Filter
     df_temp = df_5m.copy()
     df_temp.set_index('timestamp', inplace=True)
     df_15m = df_temp.resample('15min').agg({
@@ -276,9 +278,9 @@ def analyze_market(df_5m, symbol):
     live_rsi_15m = df_15m['rsi_15m'].iloc[-1] if not df_15m.empty else np.nan
 
     # ----------------------------------------------------------
-    # SIGNAL 1: 15-MINUTE OC (ELEPHANT) CANDLE FORMATION
+    # SIGNAL 1: OPERATOR OC CANDLE + 15M RSI FILTER
     # ----------------------------------------------------------
-    evaluate_elephant_candle_15m(df_15m, symbol, live_rsi_5m, live_rsi_15m)
+    evaluate_operator_oc_candle(df_5m, symbol, live_rsi_5m, live_rsi_15m)
 
     # ----------------------------------------------------------
     # SIGNAL 2: ELEPHANT ZONE TOUCHES (Supply, Demand & Midline)
@@ -344,7 +346,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. 15M OC (Elephant) Candles\n  3. Elephant Zone Touches")
+    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. Operator OC Candles + 15M RSI Filter\n  3. Elephant Zone Touches")
     
     while True:
         try:
