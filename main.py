@@ -27,7 +27,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Bot Matrix Status: ONLINE | Elephant Edge & Gann Scanner Active", 200
+    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, 15M OC, Zone Touches)", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -38,13 +38,11 @@ def run_web_server():
 # ==========================================
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 
-# 👥 MULTI-TARGET TELEGRAM DISPATCH LIST (Group + Private Backup)
 TELEGRAM_CHAT_IDS = [
     "-5385748601",  # 📡Signal Telegram Group
     "1136613703"    # Your personal Telegram ID (Backup)
 ]
 
-# 🔗 MAKE.COM WEBHOOK URL
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
@@ -57,41 +55,40 @@ DISPLAY_NAMES = {
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
 }
 
-# ⚠️ EXACT VALUES MATCHING TRADINGVIEW GANN BASE LEVELS
+# EXACT VALUES MATCHING TRADINGVIEW GANN BASE LEVELS
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 63506,
-    "ETH-USD": 1883,
-    "PAXG-USD": 4068
+    "BTC-USD": 63455,
+    "ETH-USD": 1859,
+    "PAXG-USD": 4048
 }
 
 # ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (UPDATED LEVELS)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (EXACT LEVELS)
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 64755.64, "bottom": 64483.42},
-        "Supply 1": {"top": 63982.27, "bottom": 63820.33},
-        "Demand 1": {"top": 63192.15, "bottom": 63030.21},
-        "Demand 2": {"top": 62529.06, "bottom": 62256.84},
-        "Midline": 63326.90
+        "Supply 2": {"top": 64719.16, "bottom": 64443.88},
+        "Supply 1": {"top": 63937.08, "bottom": 63773.32},
+        "Demand 1": {"top": 63138.06, "bottom": 62974.30},
+        "Demand 2": {"top": 62467.50, "bottom": 62192.27},
+        "Midline": 63232.35
     },
     "ETH-USD": {
-        "Supply 2": {"top": 1935.39, "bottom": 1924.06},
-        "Supply 1": {"top": 1903.21, "bottom": 1896.48},
-        "Demand 1": {"top": 1870.34, "bottom": 1863.61},
-        "Demand 2": {"top": 1842.76, "bottom": 1831.43},
-        "Midline": 1873.94
+        "Supply 2": {"top": 1910.80, "bottom": 1899.40},
+        "Supply 1": {"top": 1878.43, "bottom": 1871.65},
+        "Demand 1": {"top": 1845.35, "bottom": 1838.57},
+        "Demand 2": {"top": 1817.60, "bottom": 1806.20},
+        "Midline": 1856.60
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4117.11, "bottom": 4106.39},
-        "Supply 1": {"top": 4086.65, "bottom": 4080.27},
-        "Demand 1": {"top": 4055.53, "bottom": 4049.15},
-        "Demand 2": {"top": 4029.41, "bottom": 4018.69},
-        "Midline": 4062.27
+        "Supply 2": {"top": 4096.54, "bottom": 4085.87},
+        "Supply 1": {"top": 4066.23, "bottom": 4059.89},
+        "Demand 1": {"top": 4035.27, "bottom": 4028.93},
+        "Demand 2": {"top": 4009.29, "bottom": 3998.62},
+        "Midline": 4045.17
     }
 }
 
-# Dynamic caches for separate Telegram and SMS cooldown tracking
 tg_alert_cache = {}
 sms_alert_cache = {}
 
@@ -141,9 +138,9 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
 
     # ==========================================================
-    # 1. TELEGRAM DISPATCH (ORIGINAL DETAILED FORMAT)
+    # 1. TELEGRAM DISPATCH
     # ==========================================================
-    tg_cooldown = 3600  # 1 hour = 3,600 seconds
+    tg_cooldown = 1800  # 30 minutes cooldown
     send_tg = False
 
     if alert_key not in tg_alert_cache:
@@ -154,12 +151,12 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     if send_tg:
         tg_alert_cache[alert_key] = now
         
-        if "Demand" in alert_type or "Bull" in alert_type or "Base" in alert_type:
-            header = f"🟢 *[MACRO BUY SIGNAL MATCHED]* 🟢"
+        if "Demand" in alert_type or "Bull" in alert_type:
+            header = f"🟢 *[MACRO BUY SIGNAL]* 🟢"
         elif "Supply" in alert_type or "Bear" in alert_type:
-            header = f"🔴 *[MACRO SELL SIGNAL MATCHED]* 🔴"
+            header = f"🔴 *[MACRO SELL SIGNAL]* 🔴"
         else:
-            header = f"🟡 *[MACRO ZONE ALERT MATCHED]* 🟡"
+            header = f"🟡 *[GANN / ZONE SIGNAL]* 🟡"
             
         tg_message = (
             f"{header}\n\n"
@@ -167,44 +164,98 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
             f"• *Price:* `{price_str}`\n"
             f"• *RSI (5M):* `{rsi_5m_str}`\n"
             f"• *RSI (15M):* `{rsi_15m_str}`\n"
-            f"• *Timeframe:* `GLOBAL (Live)`\n"
-            f"• *Signal:* `{alert_type}`\n"
-            f"• *Context:* {message}"
+            f"• *Signal Type:* `{alert_type}`\n"
+            f"• *Details:* {message}"
         )
         send_telegram_message(tg_message)
 
     # ==========================================================
-    # 2. MOBILE SMS DISPATCH (Elephant Zones Only + 4 Hours Cooldown)
+    # 2. MOBILE SMS DISPATCH (Webhook for Make.com)
     # ==========================================================
-    if "Supply" in alert_type or "Demand" in alert_type:
-        sms_cooldown = 14400  # 4 hours = 14,400 seconds
-        send_sms = False
+    sms_cooldown = 3600  # 1 hour cooldown
+    send_sms = False
 
-        if alert_key not in sms_alert_cache:
-            send_sms = True
-        elif (now - sms_alert_cache[alert_key]).total_seconds() >= sms_cooldown:
-            send_sms = True
+    if alert_key not in sms_alert_cache:
+        send_sms = True
+    elif (now - sms_alert_cache[alert_key]).total_seconds() >= sms_cooldown:
+        send_sms = True
 
-        if send_sms:
-            sms_alert_cache[alert_key] = now
-            alert_text = f"ELEPHANT ZONE ALERT: {display_name} | {alert_type} | Price: {price_str} | RSI(5M): {rsi_5m_str}"
-            sms_payload = {
-                "body": alert_text,
-                "text": alert_text,
-                "message": alert_text
-            }
-            send_make_webhook(sms_payload)
+    if send_sms:
+        sms_alert_cache[alert_key] = now
+        alert_text = f"ALERT: {display_name} | {alert_type} | Price: {price_str} | RSI(15M): {rsi_15m_str}"
+        sms_payload = {
+            "body": alert_text,
+            "text": alert_text,
+            "message": alert_text
+        }
+        send_make_webhook(sms_payload)
 
 # ==========================================
-# STRATEGY ANALYSIS: GANN & ELEPHANT EDGE ONLY
+# SIGNAL 1: 15-MINUTE OC (ELEPHANT) CANDLE
+# ==========================================
+def evaluate_elephant_candle_15m(df_15m, symbol, rsi_5m, rsi_15m):
+    if len(df_15m) < 105:
+        return
+
+    df_15m['ma_fast'] = ta.sma(df_15m['close'], length=8)
+    df_15m['atr'] = ta.atr(df_15m['high'], df_15m['low'], df_15m['close'], length=100)
+
+    curr = df_15m.iloc[-1]
+    prev_atr = df_15m['atr'].iloc[-2]
+
+    open_p = curr['open']
+    close_p = curr['close']
+    high_p = curr['high']
+    low_p = curr['low']
+
+    body_size = abs(close_p - open_p)
+    candle_range = abs(high_p - low_p)
+
+    if candle_range == 0 or pd.isna(prev_atr):
+        return
+
+    body_percentage = (body_size * 100.0) / candle_range
+
+    is_bull = close_p > open_p
+    is_bear = close_p < open_p
+
+    body_valid = body_percentage >= 70.0
+    atr_valid = body_size >= (prev_atr * 1.3)
+
+    fast_ma_rising = df_15m['ma_fast'].iloc[-1] > df_15m['ma_fast'].iloc[-2]
+    fast_ma_falling = df_15m['ma_fast'].iloc[-1] < df_15m['ma_fast'].iloc[-2]
+
+    # Bullish OC Candle Trigger
+    if is_bull and body_valid and atr_valid and fast_ma_rising:
+        alert_key = f"{symbol}_15M_BULL_ELEPHANT_{curr.name}"
+        process_alert(
+            alert_key, 
+            "15M Bullish Elephant Candle 🐘", 
+            symbol, 
+            f"15M OC Candle Formed! Body Ratio: `{body_percentage:.1f}%`, Range: `${candle_range:.2f}`", 
+            close_p, rsi_5m, rsi_15m
+        )
+
+    # Bearish OC Candle Trigger
+    if is_bear and body_valid and atr_valid and fast_ma_falling:
+        alert_key = f"{symbol}_15M_BEAR_ELEPHANT_{curr.name}"
+        process_alert(
+            alert_key, 
+            "15M Bearish Elephant Candle 🐘", 
+            symbol, 
+            f"15M OC Candle Formed! Body Ratio: `{body_percentage:.1f}%`, Range: `${candle_range:.2f}`", 
+            close_p, rsi_5m, rsi_15m
+        )
+
+# ==========================================
+# MAIN SCANNER ROUTINE (3 SIGNALS ONLY)
 # ==========================================
 def analyze_market(df_5m, symbol):
     if len(df_5m) < 45: return
     
-    # 1. Calculate 5M RSI
+    # Calculate RSI
     df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
-    # 2. Resample 5M to 15M to Calculate 15M RSI
     df_temp = df_5m.copy()
     df_temp.set_index('timestamp', inplace=True)
     df_15m = df_temp.resample('15min').agg({
@@ -224,9 +275,14 @@ def analyze_market(df_5m, symbol):
     live_rsi_5m = df_5m['rsi_5m'].iloc[-1]
     live_rsi_15m = df_15m['rsi_15m'].iloc[-1] if not df_15m.empty else np.nan
 
-    # ==========================================================
-    # 🐘 ASSET-SPECIFIC ELEPHANT EDGE LOGIC
-    # ==========================================================
+    # ----------------------------------------------------------
+    # SIGNAL 1: 15-MINUTE OC (ELEPHANT) CANDLE FORMATION
+    # ----------------------------------------------------------
+    evaluate_elephant_candle_15m(df_15m, symbol, live_rsi_5m, live_rsi_15m)
+
+    # ----------------------------------------------------------
+    # SIGNAL 2: ELEPHANT ZONE TOUCHES (Supply, Demand & Midline)
+    # ----------------------------------------------------------
     if symbol in ELEPHANT_EDGE_LEVELS:
         levels = ELEPHANT_EDGE_LEVELS[symbol]
         
@@ -234,23 +290,29 @@ def analyze_market(df_5m, symbol):
             if key == "Midline": continue
             if live_high >= limits["bottom"] and live_low <= limits["top"]:
                 process_alert(
-                    f"{symbol}_{key.replace(' ', '_')}_Touch", f"{key} Tested", symbol, 
-                    f"Price interacted with {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", live_close, live_rsi_5m, live_rsi_15m
+                    f"{symbol}_{key.replace(' ', '_')}_Touch", 
+                    f"Elephant Zone Touch ({key})", 
+                    symbol, 
+                    f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
+                    live_close, live_rsi_5m, live_rsi_15m
                 )
                 
-        # Midline touch evaluation
+        # Midline touch check
         mid_to_check = levels.get("Midline")
         midline_buffer = 15.0 if symbol == "BTC-USD" else 1.5
         
         if mid_to_check and (live_high >= (mid_to_check - midline_buffer)) and (live_low <= (mid_to_check + midline_buffer)):
             process_alert(
-                f"{symbol}_Midline_Touch", "Elephant Edge Midline Tested", symbol, 
-                f"Price touched the Dotted Midline at `${mid_to_check:.2f}`", live_close, live_rsi_5m, live_rsi_15m
+                f"{symbol}_Midline_Touch", 
+                "Elephant Midline Touch", 
+                symbol, 
+                f"Price touched Dotted Midline at `${mid_to_check:.2f}`", 
+                live_close, live_rsi_5m, live_rsi_15m
             )
 
-    # ==========================================================
-    # 🧮 DYNAMIC GANN LOGIC
-    # ==========================================================
+    # ----------------------------------------------------------
+    # SIGNAL 3: GANN NUMBER LEVEL TOUCHES
+    # ----------------------------------------------------------
     prev_close = MANUAL_PREV_CLOSES.get(symbol)
     if prev_close:
         base_sqrt = round(math.sqrt(prev_close))
@@ -270,8 +332,11 @@ def analyze_market(df_5m, symbol):
         for g_name, g_level in gann_levels.items():
             if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
                 process_alert(
-                    f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", f"Gann Level Tested", symbol, 
-                    f"Price tested Gann {g_name} at `${g_level:.2f}`", live_close, live_rsi_5m, live_rsi_15m
+                    f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", 
+                    f"Gann Number Touch ({g_name})", 
+                    symbol, 
+                    f"Price tested Gann Level `{g_name}` at `${g_level:.2f}`", 
+                    live_close, live_rsi_5m, live_rsi_15m
                 )
 
 # ==========================================
@@ -279,7 +344,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Macro Watchlist Engine Online* 🚀\n• Broadcasting directly to 📡Signal Group\n• Telegram Alerts Cooldown: 1 Hour\n• Elephant Zone SMS Cooldown: 4 Hours.")
+    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. 15M OC (Elephant) Candles\n  3. Elephant Zone Touches")
     
     while True:
         try:
