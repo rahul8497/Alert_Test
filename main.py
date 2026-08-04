@@ -27,7 +27,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, Operator OC, Elephant Zones)", 200
+    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, 15M OC, Elephant Zones)", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -55,7 +55,6 @@ DISPLAY_NAMES = {
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
 }
 
-# EXACT VALUES MATCHING TRADINGVIEW GANN BASE LEVELS
 MANUAL_PREV_CLOSES = {
     "BTC-USD": 63455,
     "ETH-USD": 1859,
@@ -110,9 +109,6 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Network error sending Make Webhook: {e}")
 
-# ==========================================
-# DATA FETCHING PIPELINE
-# ==========================================
 def fetch_candles(symbol, limit=200):
     try:
         ticker = yf.Ticker(symbol)
@@ -137,9 +133,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
 
-    # ==========================================================
-    # 1. TELEGRAM DISPATCH
-    # ==========================================================
+    # Telegram Dispatch
     tg_cooldown = 1800  # 30 minutes cooldown
     send_tg = False
 
@@ -169,9 +163,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         )
         send_telegram_message(tg_message)
 
-    # ==========================================================
-    # 2. MOBILE SMS DISPATCH (Webhook for Make.com)
-    # ==========================================================
+    # SMS / Make Webhook Dispatch
     sms_cooldown = 3600  # 1 hour cooldown
     send_sms = False
 
@@ -191,28 +183,28 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         send_make_webhook(sms_payload)
 
 # ==========================================
-# SIGNAL 1: OPERATOR CANDLE (OC) EVALUATION
+# SIGNAL 1: 15-MINUTE OPERATOR CANDLE (OC) EVALUATION
 # ==========================================
-def evaluate_operator_oc_candle(df_5m, symbol, rsi_5m, rsi_15m):
+def evaluate_operator_oc_candle_15m(df_15m, symbol, rsi_5m, rsi_15m):
     """
-    Operator Candle (OC) conditions extracted from RG_Media_Latest2:
-    - Min move percentage pct_thresh = 0.5%
-    - Bullish OC: Previous Red, Engulfing Green, 50 < RSI(15M) < 70
-    - Bearish OC: Previous Green, Engulfing Red, 30 < RSI(15M) < 50
+    15-Minute Operator Candle (OC) Evaluator:
+    - Minimum move percentage: pct_thresh = 0.5%
+    - Bullish OC: 15M Previous Red, Engulfing 15M Green, 50 < RSI(15M) < 70
+    - Bearish OC: 15M Previous Green, Engulfing 15M Red, 30 < RSI(15M) < 50
     """
-    if len(df_5m) < 3 or pd.isna(rsi_15m):
+    if len(df_15m) < 3 or pd.isna(rsi_15m):
         return
 
-    curr = df_5m.iloc[-1]
-    prev = df_5m.iloc[-2]
+    curr = df_15m.iloc[-1]
+    prev = df_15m.iloc[-2]
 
     curr_open, curr_close = curr['open'], curr['close']
     curr_high, curr_low = curr['high'], curr['low']
     prev_open, prev_close = prev['open'], prev['close']
 
-    pct_thresh = 0.005  # 0.5% Minimum Candle Percentage
+    pct_thresh = 0.005  # 0.5% Minimum Move
 
-    # Bullish Operator Candle (OC) Condition
+    # Bullish Operator Candle (15M)
     is_prev_red = prev_close < prev_open
     is_curr_green = curr_close > curr_open
     green_move_pct = (curr_close - curr_low) / curr_low if curr_low > 0 else 0
@@ -221,16 +213,16 @@ def evaluate_operator_oc_candle(df_5m, symbol, rsi_5m, rsi_15m):
     bull_oc = is_prev_red and is_curr_green and is_engulfing_bull and (green_move_pct >= pct_thresh) and (50.0 < rsi_15m < 70.0)
 
     if bull_oc:
-        alert_key = f"{symbol}_OC_BULL_{curr.name}"
+        alert_key = f"{symbol}_15M_OC_BULL_{curr.name}"
         process_alert(
             alert_key, 
-            "Operator Bull OC Candle 🕯️", 
+            "15M Operator Bull OC Candle 🕯️", 
             symbol, 
-            f"Operator Bull Reversal Detected! Move: `{green_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
+            f"15M Bullish OC Reversal Detected! Move: `{green_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
             curr_close, rsi_5m, rsi_15m
         )
 
-    # Bearish Operator Candle (OC) Condition
+    # Bearish Operator Candle (15M)
     is_prev_green = prev_close > prev_open
     is_curr_red = curr_close < curr_open
     red_move_pct = (curr_high - curr_close) / curr_high if curr_high > 0 else 0
@@ -239,25 +231,25 @@ def evaluate_operator_oc_candle(df_5m, symbol, rsi_5m, rsi_15m):
     bear_oc = is_prev_green and is_curr_red and is_engulfing_bear and (red_move_pct >= pct_thresh) and (30.0 < rsi_15m < 50.0)
 
     if bear_oc:
-        alert_key = f"{symbol}_OC_BEAR_{curr.name}"
+        alert_key = f"{symbol}_15M_OC_BEAR_{curr.name}"
         process_alert(
             alert_key, 
-            "Operator Bear OC Candle 🕯️", 
+            "15M Operator Bear OC Candle 🕯️", 
             symbol, 
-            f"Operator Bear Reversal Detected! Move: `{red_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
+            f"15M Bearish OC Reversal Detected! Move: `{red_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
             curr_close, rsi_5m, rsi_15m
         )
 
 # ==========================================
-# MAIN SCANNER ROUTINE (ALIGNMENT ENGINE)
+# MAIN SCANNER ROUTINE
 # ==========================================
 def analyze_market(df_5m, symbol):
     if len(df_5m) < 45: return
     
-    # Calculate 5M RSI
+    # 5M RSI
     df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
-    # Calculate 15M RSI for OC Filter
+    # Resample 5M to 15M Timeframe
     df_temp = df_5m.copy()
     df_temp.set_index('timestamp', inplace=True)
     df_15m = df_temp.resample('15min').agg({
@@ -278,9 +270,9 @@ def analyze_market(df_5m, symbol):
     live_rsi_15m = df_15m['rsi_15m'].iloc[-1] if not df_15m.empty else np.nan
 
     # ----------------------------------------------------------
-    # SIGNAL 1: OPERATOR OC CANDLE + 15M RSI FILTER
+    # SIGNAL 1: 15M OPERATOR OC CANDLE + 15M RSI FILTER
     # ----------------------------------------------------------
-    evaluate_operator_oc_candle(df_5m, symbol, live_rsi_5m, live_rsi_15m)
+    evaluate_operator_oc_candle_15m(df_15m, symbol, live_rsi_5m, live_rsi_15m)
 
     # ----------------------------------------------------------
     # SIGNAL 2: ELEPHANT ZONE TOUCHES (Supply, Demand & Midline)
@@ -346,7 +338,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. Operator OC Candles + 15M RSI Filter\n  3. Elephant Zone Touches")
+    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. 15M Operator OC Candles + 15M RSI Filter\n  3. Elephant Zone Touches")
     
     while True:
         try:
