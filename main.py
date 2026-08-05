@@ -27,7 +27,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, 15M OC, Elephant Zones)", 200
+    return f"Bot Matrix Status: ONLINE | Focused Scanner Active (Gann, MTF OC, Elephant Zones)", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -40,7 +40,7 @@ TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 
 TELEGRAM_CHAT_IDS = [
     "-5385748601",  # 📡Signal Telegram Group
-    "1136613703"    # Your personal Telegram ID (Backup)
+    "1136613703"    # Personal Telegram ID
 ]
 
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
@@ -56,35 +56,35 @@ DISPLAY_NAMES = {
 }
 
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 63455,
-    "ETH-USD": 1859,
-    "PAXG-USD": 4048
+    "BTC-USD": 64044,
+    "ETH-USD": 1868,
+    "PAXG-USD": 4065
 }
 
 # ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (EXACT LEVELS)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (UPDATED LEVELS)
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 64719.16, "bottom": 64443.88},
-        "Supply 1": {"top": 63937.08, "bottom": 63773.32},
-        "Demand 1": {"top": 63138.06, "bottom": 62974.30},
-        "Demand 2": {"top": 62467.50, "bottom": 62192.27},
-        "Midline": 63232.35
+        "Supply 2": {"top": 65276.67, "bottom": 65008.05},
+        "Supply 1": {"top": 64513.50, "bottom": 64353.71},
+        "Demand 1": {"top": 63733.81, "bottom": 63574.02},
+        "Demand 2": {"top": 63079.47, "bottom": 62810.85},
+        "Midline": 63925.86
     },
     "ETH-USD": {
-        "Supply 2": {"top": 1910.80, "bottom": 1899.40},
-        "Supply 1": {"top": 1878.43, "bottom": 1871.65},
-        "Demand 1": {"top": 1845.35, "bottom": 1838.57},
-        "Demand 2": {"top": 1817.60, "bottom": 1806.20},
-        "Midline": 1856.60
+        "Supply 2": {"top": 1919.03, "bottom": 1907.93},
+        "Supply 1": {"top": 1887.49, "bottom": 1880.88},
+        "Demand 1": {"top": 1855.26, "bottom": 1848.65},
+        "Demand 2": {"top": 1828.21, "bottom": 1817.11},
+        "Midline": 1864.92
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4096.54, "bottom": 4085.87},
-        "Supply 1": {"top": 4066.23, "bottom": 4059.89},
-        "Demand 1": {"top": 4035.27, "bottom": 4028.93},
-        "Demand 2": {"top": 4009.29, "bottom": 3998.62},
-        "Midline": 4045.17
+        "Supply 2": {"top": 4112.12, "bottom": 4101.81},
+        "Supply 1": {"top": 4082.84, "bottom": 4076.71},
+        "Demand 1": {"top": 4052.93, "bottom": 4046.80},
+        "Demand 2": {"top": 4027.83, "bottom": 4017.52},
+        "Midline": 4066.47
     }
 }
 
@@ -109,10 +109,10 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Network error sending Make Webhook: {e}")
 
-def fetch_candles(symbol, limit=200):
+def fetch_candles(symbol, limit=500):
     try:
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period="5d", interval="5m")
+        history = ticker.history(period="7d", interval="5m")
         if history.empty: return None
             
         df = history.reset_index()
@@ -183,60 +183,65 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         send_make_webhook(sms_payload)
 
 # ==========================================
-# SIGNAL 1: 15-MINUTE OPERATOR CANDLE (OC) EVALUATION
+# MULTI-TIMEFRAME OPERATOR CANDLE (OC) EVALUATOR
 # ==========================================
-def evaluate_operator_oc_candle_15m(df_15m, symbol, rsi_5m, rsi_15m):
+def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     """
-    15-Minute Operator Candle (OC) Evaluator:
+    Evaluates Operator Candle (OC) Setup for specific timeframe:
     - Minimum move percentage: pct_thresh = 0.5%
-    - Bullish OC: 15M Previous Red, Engulfing 15M Green, 50 < RSI(15M) < 70
-    - Bearish OC: 15M Previous Green, Engulfing 15M Red, 30 < RSI(15M) < 50
+    - Bullish OC: Previous Red, Engulfing Green, 50 < RSI < 70
+    - Bearish OC: Previous Green, Engulfing Red, 30 < RSI < 50
     """
-    if len(df_15m) < 3 or pd.isna(rsi_15m):
+    if len(df_tf) < 3:
         return
 
-    curr = df_15m.iloc[-1]
-    prev = df_15m.iloc[-2]
+    df_tf['rsi'] = ta.rsi(df_tf['close'], length=14, mamode='rma')
+    curr = df_tf.iloc[-1]
+    prev = df_tf.iloc[-2]
 
     curr_open, curr_close = curr['open'], curr['close']
     curr_high, curr_low = curr['high'], curr['low']
     prev_open, prev_close = prev['open'], prev['close']
+    rsi_tf = curr['rsi']
+
+    if pd.isna(rsi_tf):
+        return
 
     pct_thresh = 0.005  # 0.5% Minimum Move
 
-    # Bullish Operator Candle (15M)
+    # Bullish Operator Candle
     is_prev_red = prev_close < prev_open
     is_curr_green = curr_close > curr_open
     green_move_pct = (curr_close - curr_low) / curr_low if curr_low > 0 else 0
     is_engulfing_bull = (curr_open <= prev_close) and (curr_close > prev_open)
 
-    bull_oc = is_prev_red and is_curr_green and is_engulfing_bull and (green_move_pct >= pct_thresh) and (50.0 < rsi_15m < 70.0)
+    bull_oc = is_prev_red and is_curr_green and is_engulfing_bull and (green_move_pct >= pct_thresh) and (50.0 < rsi_tf < 70.0)
 
     if bull_oc:
-        alert_key = f"{symbol}_15M_OC_BULL_{curr.name}"
+        alert_key = f"{symbol}_{tf_label}_OC_BULL_{curr.name}"
         process_alert(
             alert_key, 
-            "15M Operator Bull OC Candle 🕯️", 
+            f"{tf_label} Operator Bull OC Candle 🕯️", 
             symbol, 
-            f"15M Bullish OC Reversal Detected! Move: `{green_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
+            f"{tf_label} Bullish OC Reversal Detected! Move: `{green_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
             curr_close, rsi_5m, rsi_15m
         )
 
-    # Bearish Operator Candle (15M)
+    # Bearish Operator Candle
     is_prev_green = prev_close > prev_open
     is_curr_red = curr_close < curr_open
     red_move_pct = (curr_high - curr_close) / curr_high if curr_high > 0 else 0
     is_engulfing_bear = (curr_open >= prev_close) and (curr_close < prev_open)
 
-    bear_oc = is_prev_green and is_curr_red and is_engulfing_bear and (red_move_pct >= pct_thresh) and (30.0 < rsi_15m < 50.0)
+    bear_oc = is_prev_green and is_curr_red and is_engulfing_bear and (red_move_pct >= pct_thresh) and (30.0 < rsi_tf < 50.0)
 
     if bear_oc:
-        alert_key = f"{symbol}_15M_OC_BEAR_{curr.name}"
+        alert_key = f"{symbol}_{tf_label}_OC_BEAR_{curr.name}"
         process_alert(
             alert_key, 
-            "15M Operator Bear OC Candle 🕯️", 
+            f"{tf_label} Operator Bear OC Candle 🕯️", 
             symbol, 
-            f"15M Bearish OC Reversal Detected! Move: `{red_move_pct*100:.2f}%`, 15M RSI: `{rsi_15m:.2f}`", 
+            f"{tf_label} Bearish OC Reversal Detected! Move: `{red_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
             curr_close, rsi_5m, rsi_15m
         )
 
@@ -249,30 +254,42 @@ def analyze_market(df_5m, symbol):
     # 5M RSI
     df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
-    # Resample 5M to 15M Timeframe
+    # Resample Timeframes (15m, 1h, 4h, 1d)
     df_temp = df_5m.copy()
     df_temp.set_index('timestamp', inplace=True)
-    df_15m = df_temp.resample('15min').agg({
+    
+    resample_rules = {
         'open': 'first',
         'high': 'max',
         'low': 'min',
         'close': 'last',
         'volume': 'sum'
-    }).dropna()
-    
-    df_15m['rsi_15m'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
-    
+    }
+
+    df_15m = df_temp.resample('15min').agg(resample_rules).dropna()
+    df_1h  = df_temp.resample('1h').agg(resample_rules).dropna()
+    df_4h  = df_temp.resample('4h').agg(resample_rules).dropna()
+    df_1d  = df_temp.resample('1D').agg(resample_rules).dropna()
+
     live_low = df_5m['low'].iloc[-1]
     live_high = df_5m['high'].iloc[-1]
     live_close = df_5m['close'].iloc[-1]
     
     live_rsi_5m = df_5m['rsi_5m'].iloc[-1]
-    live_rsi_15m = df_15m['rsi_15m'].iloc[-1] if not df_15m.empty else np.nan
+    
+    if not df_15m.empty:
+        df_15m['rsi'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
+        live_rsi_15m = df_15m['rsi'].iloc[-1]
+    else:
+        live_rsi_15m = np.nan
 
     # ----------------------------------------------------------
-    # SIGNAL 1: 15M OPERATOR OC CANDLE + 15M RSI FILTER
+    # SIGNAL 1: MTF OPERATOR OC CANDLE (15M, 1H, 4H, 1D)
     # ----------------------------------------------------------
-    evaluate_operator_oc_candle_15m(df_15m, symbol, live_rsi_5m, live_rsi_15m)
+    evaluate_operator_oc_mtf(df_15m, "15M", symbol, live_rsi_5m, live_rsi_15m)
+    evaluate_operator_oc_mtf(df_1h,  "1H",  symbol, live_rsi_5m, live_rsi_15m)
+    evaluate_operator_oc_mtf(df_4h,  "4H",  symbol, live_rsi_5m, live_rsi_15m)
+    evaluate_operator_oc_mtf(df_1d,  "1D",  symbol, live_rsi_5m, live_rsi_15m)
 
     # ----------------------------------------------------------
     # SIGNAL 2: ELEPHANT ZONE TOUCHES (Supply, Demand & Midline)
@@ -338,7 +355,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. 15M Operator OC Candles + 15M RSI Filter\n  3. Elephant Zone Touches")
+    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. MTF Operator OC Candles (15M, 1H, 4H, 1D)\n  3. Elephant Zone Touches")
     
     while True:
         try:
