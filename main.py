@@ -57,9 +57,9 @@ DISPLAY_NAMES = {
 
 # Updated to match the latest chart/dashboard values
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 64606,
-    "ETH-USD": 1907,
-    "PAXG-USD": 4268
+    "BTC-USD": 64258,
+    "ETH-USD": 1902,
+    "PAXG-USD": 4244
 }
 
 # ==========================================
@@ -67,25 +67,25 @@ MANUAL_PREV_CLOSES = {
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 65775.60, "bottom": 65520.56},
-        "Supply 1": {"top": 65051.02, "bottom": 64899.31},
-        "Midline": 64460.67,
-        "Demand 1": {"top": 64310.75, "bottom": 64159.04},
-        "Demand 2": {"top": 63689.50, "bottom": 63434.46}
+        "Supply 2": {"top": 65429.51, "bottom": 65174.11},
+        "Supply 1": {"top": 64703.91, "bottom": 64551.98},
+        "Midline": 64432.40,
+        "Demand 1": {"top": 63962.60, "bottom": 63810.67},
+        "Demand 2": {"top": 63340.47, "bottom": 63085.07}
     },
     "ETH-USD": {
-        "Supply 2": {"top": 1954.76, "bottom": 1944.41},
-        "Supply 1": {"top": 1925.34, "bottom": 1919.18},
-        "Midline": 1895.82,
-        "Demand 1": {"top": 1895.28, "bottom": 1889.12},
-        "Demand 2": {"top": 1870.05, "bottom": 1859.70}
+        "Supply 2": {"top": 1949.36, "bottom": 1939.08},
+        "Supply 1": {"top": 1920.16, "bottom": 1914.05},
+        "Midline": 1903.58,
+        "Demand 1": {"top": 1890.33, "bottom": 1884.22},
+        "Demand 2": {"top": 1865.30, "bottom": 1855.02}
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4313.52, "bottom": 4303.69},
-        "Supply 1": {"top": 4285.60, "bottom": 4279.75},
-        "Midline": 4200.79,
-        "Demand 1": {"top": 4257.07, "bottom": 4251.22},
-        "Demand 2": {"top": 4233.13, "bottom": 4223.30}
+        "Supply 2": {"top": 4294.93, "bottom": 4283.85},
+        "Supply 1": {"top": 4263.47, "bottom": 4256.88},
+        "Midline": 4250.95,
+        "Demand 1": {"top": 4231.32, "bottom": 4224.73},
+        "Demand 2": {"top": 4204.35, "bottom": 4193.27}
     }
 }
 
