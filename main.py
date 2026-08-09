@@ -57,9 +57,9 @@ DISPLAY_NAMES = {
 
 # Updated to match the latest Pine Script and chart values
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 64859,
-    "ETH-USD": 1912,
-    "PAXG-USD": 4341
+    "BTC-USD": 64918,
+    "ETH-USD": 1916,
+    "PAXG-USD": 4344
 }
 
 # ==========================================
@@ -67,25 +67,25 @@ MANUAL_PREV_CLOSES = {
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 66014.88, "bottom": 65762.99},
-        "Supply 1": {"top": 65299.25, "bottom": 65149.40},
-        "Midline": 64763.54,
-        "Demand 1": {"top": 64568.12, "bottom": 64418.27},
-        "Demand 2": {"top": 63954.53, "bottom": 63702.64}
+        "Supply 2": {"top": 66049.75, "bottom": 65803.09},
+        "Supply 1": {"top": 65348.99, "bottom": 65202.26},
+        "Midline": 64949.40,
+        "Demand 1": {"top": 64633.06, "bottom": 64486.33},
+        "Demand 2": {"top": 64032.23, "bottom": 63785.57}
     },
     "ETH-USD": {
-        "Supply 2": {"top": 1957.75, "bottom": 1947.84},
-        "Supply 1": {"top": 1929.61, "bottom": 1923.72},
-        "Midline": 1914.09,
-        "Demand 1": {"top": 1900.86, "bottom": 1894.97},
-        "Demand 2": {"top": 1876.74, "bottom": 1866.83}
+        "Supply 2": {"top": 1960.28, "bottom": 1950.56},
+        "Supply 1": {"top": 1932.67, "bottom": 1926.89},
+        "Midline": 1917.32,
+        "Demand 1": {"top": 1904.47, "bottom": 1898.69},
+        "Demand 2": {"top": 1880.80, "bottom": 1871.08}
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4391.33, "bottom": 4380.31},
-        "Supply 1": {"top": 4360.03, "bottom": 4353.48},
-        "Midline": 4306.93,
-        "Demand 1": {"top": 4328.06, "bottom": 4321.51},
-        "Demand 2": {"top": 4301.23, "bottom": 4290.21}
+        "Supply 2": {"top": 4398.01, "bottom": 4386.34},
+        "Supply 1": {"top": 4364.86, "bottom": 4357.91},
+        "Midline": 4340.22,
+        "Demand 1": {"top": 4330.99, "bottom": 4324.04},
+        "Demand 2": {"top": 4302.56, "bottom": 4290.89}
     }
 }
 
