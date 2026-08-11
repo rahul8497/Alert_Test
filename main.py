@@ -46,7 +46,7 @@ TELEGRAM_CHAT_IDS = [
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
-# 📋 WATCHLIST & PREV CLOSE SYNC (UPDATED)
+# 📋 WATCHLIST & PREV CLOSE SYNC
 # ==========================================
 ACTIVE_SYMBOLS = ["BTC-USD", "ETH-USD", "PAXG-USD"]
 DISPLAY_NAMES = {
@@ -62,27 +62,27 @@ MANUAL_PREV_CLOSES = {
 }
 
 # ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (ALL ZONES UPDATED)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (SYNCED WITH PINE)
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
         "Supply 2": {"top": 65037.06, "bottom": 64795.06},
         "Supply 1": {"top": 64349.53, "bottom": 64205.57},
-        "Midline": 64339.59,  # Dotted Midline / Base Line
+        "Midline": 64339.59,  # Base Line / Midline
         "Demand 1": {"top": 63647.11, "bottom": 63503.15},
         "Demand 2": {"top": 63057.62, "bottom": 62815.62}
     },
     "ETH-USD": {
         "Supply 2": {"top": 1916.09, "bottom": 1906.44},
         "Supply 1": {"top": 1888.68, "bottom": 1882.94},
-        "Midline": 1889.37,  # Dotted Midline / Base Line
+        "Midline": 1889.37,  # Base Line / Midline
         "Demand 1": {"top": 1860.68, "bottom": 1854.94},
         "Demand 2": {"top": 1837.18, "bottom": 1827.53}
     },
     "PAXG-USD": {
         "Supply 2": {"top": 4447.34, "bottom": 4435.58},
         "Supply 1": {"top": 4413.92, "bottom": 4406.92},
-        "Midline": 4364.03,  # Dotted Midline / Base Line
+        "Midline": 4364.03,  # Base Line / Midline
         "Demand 1": {"top": 4379.76, "bottom": 4372.76},
         "Demand 2": {"top": 4351.10, "bottom": 4339.34}
     }
@@ -449,7 +449,7 @@ def analyze_market(df_5m, symbol):
             )
 
     # ----------------------------------------------------------
-    # SIGNAL 3: GANN NUMBER LEVEL TOUCHES
+    # SIGNAL 3: GANN NUMBER LEVEL TOUCHES (Matching Pine Script Formula)
     # ----------------------------------------------------------
     prev_close = MANUAL_PREV_CLOSES.get(symbol)
     if prev_close:
