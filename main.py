@@ -56,9 +56,9 @@ DISPLAY_NAMES = {
 }
 
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 63926.00,
-    "ETH-USD": 1872.00,
-    "PAXG-USD": 4393.00
+    "BTC-USD": 63537.00,
+    "ETH-USD": 1881.00,
+    "PAXG-USD": 4365.00
 }
 
 # ==========================================
@@ -66,25 +66,25 @@ MANUAL_PREV_CLOSES = {
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 65037.06, "bottom": 64795.06},
-        "Supply 1": {"top": 64349.53, "bottom": 64205.57},
-        "Midline": 64339.59,  # Base Line / Midline
-        "Demand 1": {"top": 63647.11, "bottom": 63503.15},
-        "Demand 2": {"top": 63057.62, "bottom": 62815.62}
+        "Supply 2": {"top": 64630.36, "bottom": 64392.29},
+        "Supply 1": {"top": 63954.00, "bottom": 63812.38},
+        "Midline": 63714.93,  # Dotted Midline
+        "Demand 1": {"top": 63263.00, "bottom": 63121.38},
+        "Demand 2": {"top": 62683.09, "bottom": 62445.02}
     },
     "ETH-USD": {
-        "Supply 2": {"top": 1916.09, "bottom": 1906.44},
-        "Supply 1": {"top": 1888.68, "bottom": 1882.94},
-        "Midline": 1889.37,  # Base Line / Midline
-        "Demand 1": {"top": 1860.68, "bottom": 1854.94},
-        "Demand 2": {"top": 1837.18, "bottom": 1827.53}
+        "Supply 2": {"top": 1924.64, "bottom": 1915.09},
+        "Supply 1": {"top": 1897.50, "bottom": 1891.82},
+        "Midline": 1876.30,  # Dotted Midline
+        "Demand 1": {"top": 1869.78, "bottom": 1864.10},
+        "Demand 2": {"top": 1846.51, "bottom": 1836.96}
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4447.34, "bottom": 4435.58},
-        "Supply 1": {"top": 4413.92, "bottom": 4406.92},
-        "Midline": 4364.03,  # Base Line / Midline
-        "Demand 1": {"top": 4379.76, "bottom": 4372.76},
-        "Demand 2": {"top": 4351.10, "bottom": 4339.34}
+        "Supply 2": {"top": 4420.62, "bottom": 4408.56},
+        "Supply 1": {"top": 4386.56, "bottom": 4379.19},
+        "Midline": 4381.12,  # Dotted Midline
+        "Demand 1": {"top": 4351.37, "bottom": 4344.19},
+        "Demand 2": {"top": 4322.00, "bottom": 4309.94}
     }
 }
 
