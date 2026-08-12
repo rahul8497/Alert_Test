@@ -230,8 +230,8 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
     bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
-    # Telegram Dispatch
-    tg_cooldown = 1800  # 30 minutes cooldown
+    # Telegram Dispatch - 4 Hours Cooldown (14400 Seconds)
+    tg_cooldown = 14400  
     send_tg = False
 
     if alert_key not in tg_alert_cache:
@@ -261,8 +261,8 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         )
         send_telegram_message(tg_message)
 
-    # SMS / Make Webhook Dispatch
-    sms_cooldown = 3600  # 1 hour cooldown
+    # SMS / Make Webhook Dispatch - 4 Hours Cooldown (14400 Seconds)
+    sms_cooldown = 14400  
     send_sms = False
 
     if alert_key not in sms_alert_cache:
@@ -318,7 +318,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     bull_oc = is_prev_red and is_curr_green and is_engulfing_bull and (green_move_pct >= pct_thresh) and (50.0 < rsi_tf < 70.0)
 
     if bull_oc:
-        alert_key = f"{symbol}_{tf_label}_OC_BULL_{curr.name}"
+        alert_key = f"{symbol}_{tf_label}_OC_BULL"
         process_alert(
             alert_key, 
             f"{tf_label} Operator Bull OC Candle 🕯️", 
@@ -336,7 +336,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     bear_oc = is_prev_green and is_curr_red and is_engulfing_bear and (red_move_pct >= pct_thresh) and (30.0 < rsi_tf < 50.0)
 
     if bear_oc:
-        alert_key = f"{symbol}_{tf_label}_OC_BEAR_{curr.name}"
+        alert_key = f"{symbol}_{tf_label}_OC_BEAR"
         process_alert(
             alert_key, 
             f"{tf_label} Operator Bear OC Candle 🕯️", 
@@ -353,7 +353,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     ema_bear_cross = (prev_fast >= prev_slow) and (curr_fast < curr_slow)
 
     if ema_bull_cross:
-        alert_key = f"{symbol}_{tf_label}_EMA_BULL_{curr.name}"
+        alert_key = f"{symbol}_{tf_label}_EMA_BULL"
         process_alert(
             alert_key,
             f"{tf_label} 9/21 EMA Bullish Crossover 🚀",
@@ -363,7 +363,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
         )
 
     if ema_bear_cross:
-        alert_key = f"{symbol}_{tf_label}_EMA_BEAR_{curr.name}"
+        alert_key = f"{symbol}_{tf_label}_EMA_BEAR"
         process_alert(
             alert_key,
             f"{tf_label} 9/21 EMA Bearish Crossunder 🔻",
