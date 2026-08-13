@@ -46,7 +46,7 @@ TELEGRAM_CHAT_IDS = [
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
-# 📋 WATCHLIST & PREV CLOSE SYNC
+# 📋 WATCHLIST & PREV CLOSE SYNC (UPDATED)
 # ==========================================
 ACTIVE_SYMBOLS = ["BTC-USD", "ETH-USD", "PAXG-USD"]
 DISPLAY_NAMES = {
@@ -56,35 +56,35 @@ DISPLAY_NAMES = {
 }
 
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 63537.00,
-    "ETH-USD": 1881.00,
-    "PAXG-USD": 4365.00
+    "BTC-USD": 63423.00,
+    "ETH-USD": 1878.00,
+    "PAXG-USD": 4404.00
 }
 
 # ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (SYNCED WITH PINE)
+# 🐘 ELEPHANT EDGE CONFIGURATIONS (EXACT SYNCED LEVELS)
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 64630.36, "bottom": 64392.29},
-        "Supply 1": {"top": 63954.00, "bottom": 63812.38},
-        "Midline": 63714.93,  # Dotted Midline
-        "Demand 1": {"top": 63263.00, "bottom": 63121.38},
-        "Demand 2": {"top": 62683.09, "bottom": 62445.02}
+        "Supply 2": {"top": 64494.63, "bottom": 64261.13},
+        "Supply 1": {"top": 63831.25, "bottom": 63692.35},
+        "Midline": 63689.03,  # Dotted Midline
+        "Demand 1": {"top": 63153.51, "bottom": 63014.61},
+        "Demand 2": {"top": 62584.73, "bottom": 62351.23}
     },
     "ETH-USD": {
-        "Supply 2": {"top": 1924.64, "bottom": 1915.09},
-        "Supply 1": {"top": 1897.50, "bottom": 1891.82},
-        "Midline": 1876.30,  # Dotted Midline
-        "Demand 1": {"top": 1869.78, "bottom": 1864.10},
-        "Demand 2": {"top": 1846.51, "bottom": 1836.96}
+        "Supply 2": {"top": 1921.65, "bottom": 1912.16},
+        "Supply 1": {"top": 1894.68, "bottom": 1889.03},
+        "Midline": 1890.78,  # Dotted Midline
+        "Demand 1": {"top": 1867.13, "bottom": 1861.48},
+        "Demand 2": {"top": 1844.00, "bottom": 1834.51}
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4420.62, "bottom": 4408.56},
-        "Supply 1": {"top": 4386.56, "bottom": 4379.19},
-        "Midline": 4381.12,  # Dotted Midline
-        "Demand 1": {"top": 4351.37, "bottom": 4344.19},
-        "Demand 2": {"top": 4322.00, "bottom": 4309.94}
+        "Supply 2": {"top": 4459.07, "bottom": 4447.06},
+        "Supply 1": {"top": 4424.94, "bottom": 4417.79},
+        "Midline": 4399.08,  # Dotted Midline
+        "Demand 1": {"top": 4390.07, "bottom": 4382.92},
+        "Demand 2": {"top": 4360.80, "bottom": 4348.79}
     }
 }
 
