@@ -56,9 +56,9 @@ DISPLAY_NAMES = {
 }
 
 MANUAL_PREV_CLOSES = {
-    "BTC-USD": 77063.00,
-    "ETH-USD": 2422.00,
-    "PAXG-USD": 4588.00
+    "BTC-USD": 77704.00,
+    "ETH-USD": 2462.00,
+    "PAXG-USD": 4614.00
 }
 
 # ==========================================
@@ -66,25 +66,25 @@ MANUAL_PREV_CLOSES = {
 # ==========================================
 ELEPHANT_EDGE_LEVELS = {
     "BTC-USD": {
-        "Supply 2": {"top": 78451.50, "bottom": 78148.95},
-        "Supply 1": {"top": 77591.94, "bottom": 77411.96},
-        "Midline": 77463.19,  # Dotted Midline / Base Line
-        "Demand 1": {"top": 76713.76, "bottom": 76533.78},
-        "Demand 2": {"top": 75976.77, "bottom": 75674.22}
+        "Supply 2": {"top": 79146.59, "bottom": 78832.34},
+        "Supply 1": {"top": 78253.79, "bottom": 78066.85},
+        "Midline": 77105.02,  # Dotted Midline / Base Line
+        "Demand 1": {"top": 77341.65, "bottom": 77154.71},
+        "Demand 2": {"top": 76576.16, "bottom": 76261.91}
     },
     "ETH-USD": {
-        "Supply 2": {"top": 2480.60, "bottom": 2467.88},
-        "Supply 1": {"top": 2444.47, "bottom": 2436.91},
-        "Midline": 2446.99,  # Dotted Midline / Base Line
-        "Demand 1": {"top": 2407.57, "bottom": 2400.01},
-        "Demand 2": {"top": 2376.60, "bottom": 2363.88}
+        "Supply 2": {"top": 2524.13, "bottom": 2510.69},
+        "Supply 1": {"top": 2485.94, "bottom": 2477.95},
+        "Midline": 2434.11,  # Dotted Midline / Base Line
+        "Demand 1": {"top": 2446.93, "bottom": 2438.94},
+        "Demand 2": {"top": 2414.19, "bottom": 2400.75}
     },
     "PAXG-USD": {
-        "Supply 2": {"top": 4649.23, "bottom": 4635.90},
-        "Supply 1": {"top": 4611.34, "bottom": 4603.41},
-        "Midline": 4586.78,  # Dotted Midline / Base Line
-        "Demand 1": {"top": 4572.63, "bottom": 4564.70},
-        "Demand 2": {"top": 4540.14, "bottom": 4526.81}
+        "Supply 2": {"top": 4676.10, "bottom": 4662.64},
+        "Supply 1": {"top": 4637.86, "bottom": 4629.86},
+        "Midline": 4604.61,  # Dotted Midline / Base Line
+        "Demand 1": {"top": 4598.80, "bottom": 4590.80},
+        "Demand 2": {"top": 4566.02, "bottom": 4552.56}
     }
 }
 
