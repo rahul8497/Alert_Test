@@ -46,46 +46,13 @@ TELEGRAM_CHAT_IDS = [
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
-# 📋 WATCHLIST & PREV CLOSE SYNC (UPDATED)
+# 📋 WATCHLIST
 # ==========================================
 ACTIVE_SYMBOLS = ["BTC-USD", "ETH-USD", "PAXG-USD"]
 DISPLAY_NAMES = {
     "BTC-USD": "BITCOIN (BTC/USD)",
     "ETH-USD": "ETHEREUM (ETH/USD)",
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
-}
-
-MANUAL_PREV_CLOSES = {
-    "BTC-USD": 77704.00,
-    "ETH-USD": 2462.00,
-    "PAXG-USD": 4614.00
-}
-
-# ==========================================
-# 🐘 ELEPHANT EDGE CONFIGURATIONS (UPDATED SYNCED LEVELS)
-# ==========================================
-ELEPHANT_EDGE_LEVELS = {
-    "BTC-USD": {
-        "Supply 2": {"top": 79146.59, "bottom": 78832.34},
-        "Supply 1": {"top": 78253.79, "bottom": 78066.85},
-        "Midline": 77105.02,  # Dotted Midline / Base Line
-        "Demand 1": {"top": 77341.65, "bottom": 77154.71},
-        "Demand 2": {"top": 76576.16, "bottom": 76261.91}
-    },
-    "ETH-USD": {
-        "Supply 2": {"top": 2524.13, "bottom": 2510.69},
-        "Supply 1": {"top": 2485.94, "bottom": 2477.95},
-        "Midline": 2434.11,  # Dotted Midline / Base Line
-        "Demand 1": {"top": 2446.93, "bottom": 2438.94},
-        "Demand 2": {"top": 2414.19, "bottom": 2400.75}
-    },
-    "PAXG-USD": {
-        "Supply 2": {"top": 4676.10, "bottom": 4662.64},
-        "Supply 1": {"top": 4637.86, "bottom": 4629.86},
-        "Midline": 4604.61,  # Dotted Midline / Base Line
-        "Demand 1": {"top": 4598.80, "bottom": 4590.80},
-        "Demand 2": {"top": 4566.02, "bottom": 4552.56}
-    }
 }
 
 tg_alert_cache = {}
@@ -122,13 +89,72 @@ def fetch_candles(symbol, limit=500):
         return None
 
 # ==========================================
+# 🐘 DYNAMIC ADSZ ELEPHANT ZONE CALCULATOR ENGINE
+# ==========================================
+def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
+    """
+    Translates Pine Script Adaptive Demand & Supply Zones (ADSZ) logic:
+    - Calculates ATR-based volatility parameters.
+    - Generates 4 Dynamic Zones (Supply 2, Supply 1, Demand 1, Demand 2).
+    - Calculates CPR Central Pivot (Dotted Midline / Base Line).
+    """
+    if len(df_1d) < d_atr_period + 2:
+        return None
+
+    df_calc = df_1d.copy()
+    df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=d_atr_period)
+    
+    # Extract shift(1) daily values matching Pine Script request.security
+    day_open = df_calc['open'].iloc[-1]
+    day_atr_prev = df_calc['atr'].iloc[-2]
+    day_close_prev = df_calc['close'].iloc[-2]
+    day_high_prev = df_calc['high'].iloc[-2]
+    day_low_prev = df_calc['low'].iloc[-2]
+
+    if pd.isna(day_atr_prev) or day_close_prev == 0:
+        return None
+
+    # Constants from Pine Script
+    phi = 1.618034
+    sqrt2 = math.sqrt(2)
+    sqrt252 = math.sqrt(252)
+
+    # Volatility & Sigma Math
+    atr_ann_pct = (day_atr_prev / day_close_prev) * sqrt252 * 100.0
+    effvol = (d_slope * atr_ann_pct) + d_intercept
+
+    P = round(day_open)
+    sigma = (P * effvol) / (100.0 * sqrt252)
+    dist_strong = sigma
+    dist_weak = sigma / (2.0 * sqrt2)
+    ws = round(sigma / 4.0)
+    ww = round(sigma / (4.0 * phi))
+
+    # Zone Boundaries Math
+    sd_low   = round(P - dist_strong - (ws / 2.0))
+    sd_high  = round(P - dist_strong + (ws / 2.0))
+    wd_low   = round(P - dist_weak   - (ww / 2.0))
+    wd_high  = round(P - dist_weak   + (ww / 2.0))
+    wsp_low  = round(P + dist_weak   - (ww / 2.0))
+    wsp_high = round(P + dist_weak   + (ww / 2.0))
+    ss_low   = round(P + dist_strong - (ws / 2.0))
+    ss_high  = round(P + dist_strong + (ws / 2.0))
+
+    # Dotted Midline (Daily CPR Central Pivot of previous day)
+    dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
+
+    return {
+        "Supply 2": {"top": float(ss_high), "bottom": float(ss_low)},
+        "Supply 1": {"top": float(wsp_high), "bottom": float(wsp_low)},
+        "Midline": float(dpoc),
+        "Demand 1": {"top": float(wd_high), "bottom": float(wd_low)},
+        "Demand 2": {"top": float(sd_high), "bottom": float(sd_low)}
+    }
+
+# ==========================================
 # 💡 TP BUBBLE CALCULATION ENGINE
 # ==========================================
 def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0, sl1_val=1.5):
-    """
-    Calculates historical Take Profit hit rates (TP1, TP2, TP3) and determines 
-    the best recommended TP target and hit rate percentage (Pine Script Bubble Logic).
-    """
     if len(df) < slow_len + atr_len:
         return "TP1 50.0%", 1, 50.0
 
@@ -164,7 +190,6 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
 
             hit_1, hit_2, hit_3 = False, False, False
 
-            # Evaluate forward bars for TP hits
             for j in range(i + 1, min(i + 30, len(df_calc))):
                 high_p = df_calc['high'].iloc[j]
                 low_p = df_calc['low'].iloc[j]
@@ -284,9 +309,6 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
 # MULTI-TIMEFRAME EVALUATOR (OC CANDLES & TP BUBBLE CROSSOVERS)
 # ==========================================
 def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
-    """
-    Evaluates Operator Candle (OC) Setup & Strategy Crossovers for specific timeframe (15M, 1H, 4H, 1D):
-    """
     if len(df_tf) < 25:
         return
 
@@ -306,7 +328,6 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
 
     pct_thresh = 0.005  # 0.5% Minimum Move
 
-    # Calculate Suggested TP Bubble for this timeframe
     tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_tf)
 
     # 1. Bullish Operator Candle
@@ -411,7 +432,7 @@ def analyze_market(df_5m, symbol):
         live_rsi_15m = np.nan
 
     # ----------------------------------------------------------
-    # SIGNAL 1: MTF OPERATOR OC CANDLES & EMA CROSSOVER BUBBLE (15M, 1H, 4H, 1D)
+    # SIGNAL 1: MTF OPERATOR OC CANDLES & EMA CROSSOVER BUBBLE
     # ----------------------------------------------------------
     evaluate_operator_oc_mtf(df_15m, "15M", symbol, live_rsi_5m, live_rsi_15m)
     evaluate_operator_oc_mtf(df_1h,  "1H",  symbol, live_rsi_5m, live_rsi_15m)
@@ -419,12 +440,13 @@ def analyze_market(df_5m, symbol):
     evaluate_operator_oc_mtf(df_1d,  "1D",  symbol, live_rsi_5m, live_rsi_15m)
 
     # ----------------------------------------------------------
-    # SIGNAL 2: ELEPHANT ZONE TOUCHES (Supply, Demand & Midline)
+    # SIGNAL 2: AUTOMATED ELEPHANT ADSZ ZONES & DOTTED MIDLINE TOUCHES
     # ----------------------------------------------------------
-    if symbol in ELEPHANT_EDGE_LEVELS:
-        levels = ELEPHANT_EDGE_LEVELS[symbol]
-        
-        for key, limits in levels.items():
+    dynamic_elephant_levels = calculate_adsz_levels(df_1d)
+    
+    if dynamic_elephant_levels:
+        # Check Supply & Demand Zone Touches
+        for key, limits in dynamic_elephant_levels.items():
             if key == "Midline": continue
             if live_high >= limits["bottom"] and live_low <= limits["top"]:
                 process_alert(
@@ -435,8 +457,8 @@ def analyze_market(df_5m, symbol):
                     live_close, live_rsi_5m, live_rsi_15m
                 )
                 
-        # Midline touch check
-        mid_to_check = levels.get("Midline")
+        # Dotted Midline touch check (Dynamic CPR Pivot)
+        mid_to_check = dynamic_elephant_levels.get("Midline")
         midline_buffer = 15.0 if symbol == "BTC-USD" else 1.5
         
         if mid_to_check and (live_high >= (mid_to_check - midline_buffer)) and (live_low <= (mid_to_check + midline_buffer)):
@@ -449,10 +471,10 @@ def analyze_market(df_5m, symbol):
             )
 
     # ----------------------------------------------------------
-    # SIGNAL 3: GANN NUMBER LEVEL TOUCHES (Matching Pine Script Formula)
+    # SIGNAL 3: DYNAMIC GANN NUMBER LEVEL TOUCHES
     # ----------------------------------------------------------
-    prev_close = MANUAL_PREV_CLOSES.get(symbol)
-    if prev_close:
+    if len(df_1d) >= 2:
+        prev_close = df_1d['close'].iloc[-2]  # Pulls actual previous day's close dynamically
         base_sqrt = round(math.sqrt(prev_close))
         
         gann_levels = {
@@ -482,7 +504,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Global Macro Market Scanner Online...")
-    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Gann Numbers\n  2. MTF Operator OC Candles (15M, 1H, 4H, 1D)\n  3. Elephant Zone Touches\n  4. Strategy TP Bubble Recommendations (15M, 1H, 4H, 1D)")
+    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Important Numbers\n  2. Operator OC Candles (15M, 1H, 4H, 1D)\n  3. Zone Touches\n  4. Trend Recommendations (15M, 1H, 4H, 1D)")
     
     while True:
         try:
