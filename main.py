@@ -76,7 +76,7 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Network error sending Make Webhook: {e}")
 
-# Optimized live fetch function to prevent yfinance caching delay
+# Live fetch function for intraday data
 def fetch_candles(symbol, limit=500):
     try:
         ticker = yf.Ticker(symbol)
@@ -90,17 +90,25 @@ def fetch_candles(symbol, limit=500):
         print(f"Fetch error for {symbol}: {e}")
         return None
 
+# Dedicated daily fetcher to guarantee full ATR depth for ADSZ calculation
+def fetch_daily_candles(symbol, limit=60):
+    try:
+        ticker = yf.Ticker(symbol)
+        history = ticker.history(period="3m", interval="1d")
+        if history.empty: return None
+            
+        df = history.reset_index()
+        df.rename(columns={"Date": "timestamp", "Datetime": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        return df.tail(limit).copy()
+    except Exception as e:
+        print(f"Daily fetch error for {symbol}: {e}")
+        return None
+
 # ==========================================
 # 🐘 DYNAMIC ADSZ ELEPHANT ZONE CALCULATOR ENGINE
 # ==========================================
 def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
-    """
-    Translates Pine Script Adaptive Demand & Supply Zones (ADSZ) logic:
-    - Calculates ATR-based volatility parameters.
-    - Generates 4 Dynamic Zones (Supply 2, Supply 1, Demand 1, Demand 2).
-    - Calculates CPR Central Pivot (Dotted Midline / Base Line).
-    """
-    if len(df_1d) < d_atr_period + 2:
+    if df_1d is None or len(df_1d) < d_atr_period + 2:
         return None
 
     df_calc = df_1d.copy()
@@ -157,7 +165,7 @@ def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0)
 # 💡 TP BUBBLE CALCULATION ENGINE
 # ==========================================
 def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0, sl1_val=1.5):
-    if len(df) < slow_len + atr_len:
+    if df is None or len(df) < slow_len + atr_len:
         return "TP1 50.0%", 1, 50.0
 
     df_calc = df.copy()
@@ -311,7 +319,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
 # MULTI-TIMEFRAME EVALUATOR (OC CANDLES & TP BUBBLE CROSSOVERS)
 # ==========================================
 def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
-    if len(df_tf) < 25:
+    if df_tf is None or len(df_tf) < 25:
         return
 
     df_tf['rsi'] = ta.rsi(df_tf['close'], length=14, mamode='rma')
@@ -404,7 +412,7 @@ def analyze_market(df_5m, symbol):
     # 5M RSI
     df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
     
-    # Resample Timeframes (15m, 1h, 4h, 1d)
+    # Resample Timeframes (15m, 1h, 4h) from intraday data
     df_temp = df_5m.copy()
     df_temp.set_index('timestamp', inplace=True)
     
@@ -419,7 +427,9 @@ def analyze_market(df_5m, symbol):
     df_15m = df_temp.resample('15min').agg(resample_rules).dropna()
     df_1h  = df_temp.resample('1h').agg(resample_rules).dropna()
     df_4h  = df_temp.resample('4h').agg(resample_rules).dropna()
-    df_1d  = df_temp.resample('1D').agg(resample_rules).dropna()
+    
+    # Fetch dedicated daily data directly for Elephant Zones & Daily OC
+    df_1d  = fetch_daily_candles(symbol)
 
     live_low = df_5m['low'].iloc[-1]
     live_high = df_5m['high'].iloc[-1]
@@ -427,7 +437,7 @@ def analyze_market(df_5m, symbol):
     
     live_rsi_5m = df_5m['rsi_5m'].iloc[-1]
     
-    if not df_15m.empty:
+    if df_15m is not None and not df_15m.empty:
         df_15m['rsi'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
         live_rsi_15m = df_15m['rsi'].iloc[-1]
     else:
@@ -475,7 +485,7 @@ def analyze_market(df_5m, symbol):
     # ----------------------------------------------------------
     # SIGNAL 3: DYNAMIC GANN NUMBER LEVEL TOUCHES
     # ----------------------------------------------------------
-    if len(df_1d) >= 2:
+    if df_1d is not None and len(df_1d) >= 2:
         prev_close = df_1d['close'].iloc[-2]  # Pulls actual previous day's close dynamically
         base_sqrt = round(math.sqrt(prev_close))
         
