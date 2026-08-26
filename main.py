@@ -115,11 +115,11 @@ def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0)
     df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=d_atr_period)
     
     # Extract shift(1) daily values matching Pine Script request.security
-    day_open = df_calc['open'].iloc[-1]
-    day_atr_prev = df_calc['atr'].iloc[-2]
-    day_close_prev = df_calc['close'].iloc[-2]
-    day_high_prev = df_calc['high'].iloc[-2]
-    day_low_prev = df_calc['low'].iloc[-2]
+    day_open = float(df_calc['open'].iloc[-1])
+    day_atr_prev = float(df_calc['atr'].iloc[-2])
+    day_close_prev = float(df_calc['close'].iloc[-2])
+    day_high_prev = float(df_calc['high'].iloc[-2])
+    day_low_prev = float(df_calc['low'].iloc[-2])
 
     if pd.isna(day_atr_prev) or day_close_prev == 0:
         return None
@@ -133,32 +133,32 @@ def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0)
     atr_ann_pct = (day_atr_prev / day_close_prev) * sqrt252 * 100.0
     effvol = (d_slope * atr_ann_pct) + d_intercept
 
-    P = round(day_open)
+    P = day_open
     sigma = (P * effvol) / (100.0 * sqrt252)
     dist_strong = sigma
     dist_weak = sigma / (2.0 * sqrt2)
-    ws = round(sigma / 4.0)
-    ww = round(sigma / (4.0 * phi))
+    ws = sigma / 4.0
+    ww = sigma / (4.0 * phi)
 
-    # Zone Boundaries Math
-    sd_low   = round(P - dist_strong - (ws / 2.0))
-    sd_high  = round(P - dist_strong + (ws / 2.0))
-    wd_low   = round(P - dist_weak   - (ww / 2.0))
-    wd_high  = round(P - dist_weak   + (ww / 2.0))
-    wsp_low  = round(P + dist_weak   - (ww / 2.0))
-    wsp_high = round(P + dist_weak   + (ww / 2.0))
-    ss_low   = round(P + dist_strong - (ws / 2.0))
-    ss_high  = round(P + dist_strong + (ws / 2.0))
+    # Zone Boundaries Math (Continuous bands)
+    sd_low   = P - dist_strong - (ws / 2.0)
+    sd_high  = P - dist_strong + (ws / 2.0)
+    wd_low   = P - dist_weak   - (ww / 2.0)
+    wd_high  = P - dist_weak   + (ww / 2.0)
+    wsp_low  = P + dist_weak   - (ww / 2.0)
+    wsp_high = P + dist_weak   + (ww / 2.0)
+    ss_low   = P + dist_strong - (ws / 2.0)
+    ss_high  = P + dist_strong + (ws / 2.0)
 
     # Dotted Midline (Daily CPR Central Pivot of previous day)
-    dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
+    dpoc = (day_high_prev + day_low_prev + day_close_prev) / 3.0
 
     return {
-        "Supply 2": {"top": float(ss_high), "bottom": float(ss_low)},
-        "Supply 1": {"top": float(wsp_high), "bottom": float(wsp_low)},
-        "Midline": float(dpoc),
-        "Demand 1": {"top": float(wd_high), "bottom": float(wd_low)},
-        "Demand 2": {"top": float(sd_high), "bottom": float(sd_low)}
+        "Supply 2": {"top": ss_high, "bottom": ss_low},
+        "Supply 1": {"top": wsp_high, "bottom": wsp_low},
+        "Midline":  dpoc,
+        "Demand 1": {"top": wd_high, "bottom": wd_low},
+        "Demand 2": {"top": sd_high, "bottom": sd_low}
     }
 
 # ==========================================
@@ -457,6 +457,16 @@ def analyze_market(df_5m, symbol):
     dynamic_elephant_levels = calculate_adsz_levels(df_1d)
     
     if dynamic_elephant_levels:
+        # 🔍 DEBUG LOG: Print exact levels once per run to compare with TradingView
+        if symbol == "BTC-USD":
+            print(f"\n--- [DEBUG] {symbol} Price: ${live_close:,.2f} ---")
+            for k, v in dynamic_elephant_levels.items():
+                if k == "Midline":
+                    print(f"  • Midline: ${v:,.2f}")
+                else:
+                    print(f"  • {k}: ${v['bottom']:,.2f} to ${v['top']:,.2f}")
+            print("-------------------------------------------\n")
+
         # Check Supply & Demand Zone Touches
         for key, limits in dynamic_elephant_levels.items():
             if key == "Midline": continue
@@ -486,7 +496,7 @@ def analyze_market(df_5m, symbol):
     # SIGNAL 3: DYNAMIC GANN NUMBER LEVEL TOUCHES
     # ----------------------------------------------------------
     if df_1d is not None and len(df_1d) >= 2:
-        prev_close = df_1d['close'].iloc[-2]  # Pulls actual previous day's close dynamically
+        prev_close = df_1d['close'].iloc[-2]
         base_sqrt = round(math.sqrt(prev_close))
         
         gann_levels = {
