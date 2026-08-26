@@ -381,11 +381,14 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     if bull_oc:
         alert_key = f"{symbol}_{tf_label}_OC_BULL"
         process_alert(
-            alert_key, 
-            f"{tf_label} Operator Bull OC Candle 🕯️", 
-            symbol, 
-            f"{tf_label} Bullish OC Reversal! Move: `{green_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
-            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
+            alert_key=alert_key, 
+            alert_type=f"{tf_label} Operator Bull OC Candle 🕯️", 
+            symbol=symbol, 
+            message=f"{tf_label} Bullish OC Reversal! Move: `{green_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
+            price=curr_close, 
+            rsi_5m=rsi_5m, 
+            rsi_15m=rsi_15m, 
+            tp_bubble=tp_bubble_text
         )
 
     # 2. Bearish Operator Candle
@@ -399,11 +402,14 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     if bear_oc:
         alert_key = f"{symbol}_{tf_label}_OC_BEAR"
         process_alert(
-            alert_key, 
-            f"{tf_label} Operator Bear OC Candle 🕯️", 
-            symbol, 
-            f"{tf_label} Bearish OC Reversal! Move: `{red_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
-            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
+            alert_key=alert_key, 
+            alert_type=f"{tf_label} Operator Bear OC Candle 🕯️", 
+            symbol=symbol, 
+            message=f"{tf_label} Bearish OC Reversal! Move: `{red_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
+            price=curr_close, 
+            rsi_5m=rsi_5m, 
+            rsi_15m=rsi_15m, 
+            tp_bubble=tp_bubble_text
         )
 
     # 3. Strategy EMA Crossover Trigger
@@ -416,21 +422,27 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     if ema_bull_cross:
         alert_key = f"{symbol}_{tf_label}_EMA_BULL"
         process_alert(
-            alert_key,
-            f"{tf_label} 9/21 EMA Bullish Crossover 🚀",
-            symbol,
-            f"Golden Cross detected on {tf_label}! Recommended Target: `{tp_bubble_text}`",
-            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
+            alert_key=alert_key,
+            alert_type=f"{tf_label} 9/21 EMA Bullish Crossover 🚀",
+            symbol=symbol,
+            message=f"Golden Cross detected on {tf_label}! Recommended Target: `{tp_bubble_text}`",
+            price=curr_close, 
+            rsi_5m=rsi_5m, 
+            rsi_15m=rsi_15m, 
+            tp_bubble=tp_bubble_text
         )
 
     if ema_bear_cross:
         alert_key = f"{symbol}_{tf_label}_EMA_BEAR"
         process_alert(
-            alert_key,
-            f"{tf_label} 9/21 EMA Bearish Crossunder 🔻",
-            symbol,
-            f"Death Cross detected on {tf_label}! Recommended Target: `{tp_bubble_text}`",
-            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
+            alert_key=alert_key,
+            alert_type=f"{tf_label} 9/21 EMA Bearish Crossunder 🔻",
+            symbol=symbol,
+            message=f"Death Cross detected on {tf_label}! Recommended Target: `{tp_bubble_text}`",
+            price=curr_close, 
+            rsi_5m=rsi_5m, 
+            rsi_15m=rsi_15m, 
+            tp_bubble=tp_bubble_text
         )
 
 # ==========================================
@@ -488,15 +500,19 @@ def analyze_market(df_5m, symbol):
         dynamic_elephant_levels = calculate_adsz_levels(df_1d, df_1w)
         
         if dynamic_elephant_levels:
-            # 1. Supply & Demand Zone Touches
+            # 1. Supply & Demand Zone Touches (Fixed Range Overlap Check)
             for key, limits in dynamic_elephant_levels.items():
                 if "Midline" in key or limits is None or not isinstance(limits, dict): continue
                 
-                buf = 15.0 if symbol == "BTC-USD" else 0.5
-                zone_bottom = limits["bottom"] - buf
-                zone_top = limits["top"] + buf
+                buf = 25.0 if symbol == "BTC-USD" else 1.0
+                z_bottom = limits["bottom"] - buf
+                z_top = limits["top"] + buf
 
-                if live_high >= zone_bottom and live_low <= zone_top:
+                # Evaluates True if candle high/low overlaps or price resides within zone limits
+                is_inside = (live_close >= z_bottom) and (live_close <= z_top)
+                is_wicking = (live_high >= z_bottom) and (live_low <= z_top)
+
+                if is_inside or is_wicking:
                     process_alert(
                         alert_key=f"{symbol}_{key.replace(' ', '_')}_Touch", 
                         alert_type=f"Elephant Zone Touch ({key})", 
