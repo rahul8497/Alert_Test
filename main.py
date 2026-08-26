@@ -297,7 +297,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
     bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
-    # Telegram Dispatch with dynamic cooldown
+    # Telegram Dispatch
     send_tg = False
 
     if alert_key not in tg_alert_cache:
@@ -385,7 +385,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
             f"{tf_label} Operator Bull OC Candle 🕯️", 
             symbol, 
             f"{tf_label} Bullish OC Reversal! Move: `{green_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
-            curr_close, rsi_5m, rsi_15m, tp_bubble=tp_bubble_text
+            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
         )
 
     # 2. Bearish Operator Candle
@@ -403,7 +403,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
             f"{tf_label} Operator Bear OC Candle 🕯️", 
             symbol, 
             f"{tf_label} Bearish OC Reversal! Move: `{red_move_pct*100:.2f}%`, {tf_label} RSI: `{rsi_tf:.2f}`", 
-            curr_close, rsi_5m, rsi_15m, tp_bubble=tp_bubble_text
+            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
         )
 
     # 3. Strategy EMA Crossover Trigger
@@ -420,7 +420,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
             f"{tf_label} 9/21 EMA Bullish Crossover 🚀",
             symbol,
             f"Golden Cross detected on {tf_label}! Recommended Target: `{tp_bubble_text}`",
-            curr_close, rsi_5m, rsi_15m, tp_bubble=tp_bubble_text
+            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
         )
 
     if ema_bear_cross:
@@ -430,7 +430,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
             f"{tf_label} 9/21 EMA Bearish Crossunder 🔻",
             symbol,
             f"Death Cross detected on {tf_label}! Recommended Target: `{tp_bubble_text}`",
-            curr_close, rsi_5m, rsi_15m, tp_bubble=tp_bubble_text
+            price=curr_close, rsi_5m=rsi_5m, rsi_15m=rsi_15m, tp_bubble=tp_bubble_text
         )
 
 # ==========================================
@@ -488,23 +488,24 @@ def analyze_market(df_5m, symbol):
         dynamic_elephant_levels = calculate_adsz_levels(df_1d, df_1w)
         
         if dynamic_elephant_levels:
-            # 1. Supply & Demand Zone Touches (Reduced to 15-min cooldown to avoid blocking re-tests)
+            # 1. Supply & Demand Zone Touches
             for key, limits in dynamic_elephant_levels.items():
                 if "Midline" in key or limits is None or not isinstance(limits, dict): continue
                 
-                # Add $10 buffer for BTC to account for TradingView / Yahoo price spread
-                buf = 10.0 if symbol == "BTC-USD" else 0.5
+                buf = 15.0 if symbol == "BTC-USD" else 0.5
                 zone_bottom = limits["bottom"] - buf
                 zone_top = limits["top"] + buf
 
                 if live_high >= zone_bottom and live_low <= zone_top:
                     process_alert(
-                        f"{symbol}_{key.replace(' ', '_')}_Touch", 
-                        f"Elephant Zone Touch ({key})", 
-                        symbol, 
-                        f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
-                        live_close, live_rsi_5m, live_rsi_15m,
-                        cooldown_sec=0  # 15 minutes cooldown for zone re-tests
+                        alert_key=f"{symbol}_{key.replace(' ', '_')}_Touch", 
+                        alert_type=f"Elephant Zone Touch ({key})", 
+                        symbol=symbol, 
+                        message=f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
+                        price=live_close, 
+                        rsi_5m=live_rsi_5m, 
+                        rsi_15m=live_rsi_15m,
+                        cooldown_sec=900
                     )
                     
             # 2. Daily Midline Touch Check (dpoc)
@@ -513,11 +514,13 @@ def analyze_market(df_5m, symbol):
             
             if d_mid and (live_high >= (d_mid - d_buffer)) and (live_low <= (d_mid + d_buffer)):
                 process_alert(
-                    f"{symbol}_Daily_Midline_Touch", 
-                    "Daily Midline Touch 🎯", 
-                    symbol, 
-                    f"Price touched Daily Midline (CPR Pivot) at `${d_mid:.2f}`", 
-                    live_close, live_rsi_5m, live_rsi_15m,
+                    alert_key=f"{symbol}_Daily_Midline_Touch", 
+                    alert_type="Daily Midline Touch 🎯", 
+                    symbol=symbol, 
+                    message=f"Price touched Daily Midline (CPR Pivot) at `${d_mid:.2f}`", 
+                    price=live_close, 
+                    rsi_5m=live_rsi_5m, 
+                    rsi_15m=live_rsi_15m,
                     cooldown_sec=900
                 )
 
@@ -527,11 +530,13 @@ def analyze_market(df_5m, symbol):
             
             if w_mid and (live_high >= (w_mid - w_buffer)) and (live_low <= (w_mid + w_buffer)):
                 process_alert(
-                    f"{symbol}_Weekly_Midline_Touch", 
-                    "Weekly Midline Touch 🎯", 
-                    symbol, 
-                    f"Price touched Weekly Midline (POC) at `${w_mid:.2f}`", 
-                    live_close, live_rsi_5m, live_rsi_15m,
+                    alert_key=f"{symbol}_Weekly_Midline_Touch", 
+                    alert_type="Weekly Midline Touch 🎯", 
+                    symbol=symbol, 
+                    message=f"Price touched Weekly Midline (POC) at `${w_mid:.2f}`", 
+                    price=live_close, 
+                    rsi_5m=live_rsi_5m, 
+                    rsi_15m=live_rsi_15m,
                     cooldown_sec=900
                 )
 
@@ -557,11 +562,13 @@ def analyze_market(df_5m, symbol):
             for g_name, g_level in gann_levels.items():
                 if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
                     process_alert(
-                        f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", 
-                        f"Gann Number Touch ({g_name})", 
-                        symbol, 
-                        f"Price tested Gann Level `{g_name}` at `${g_level:.2f}`", 
-                        live_close, live_rsi_5m, live_rsi_15m
+                        alert_key=f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", 
+                        alert_type=f"Gann Number Touch ({g_name})", 
+                        symbol=symbol, 
+                        message=f"Price tested Gann Level `{g_name}` at `${g_level:.2f}`", 
+                        price=live_close, 
+                        rsi_5m=live_rsi_5m, 
+                        rsi_15m=live_rsi_15m
                     )
     except Exception as e:
         print(f"Error analyzing market for {symbol}: {e}")
