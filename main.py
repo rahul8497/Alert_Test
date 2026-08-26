@@ -76,7 +76,7 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Network error sending Make Webhook: {e}")
 
-# Live fetch function for intraday data
+# Live fetch function for 5m intraday candles
 def fetch_candles(symbol, limit=500):
     try:
         ticker = yf.Ticker(symbol)
@@ -90,7 +90,7 @@ def fetch_candles(symbol, limit=500):
         print(f"Fetch error for {symbol}: {e}")
         return None
 
-# Dedicated daily fetcher to guarantee full ATR depth for ADSZ calculation
+# Dedicated daily fetcher
 def fetch_daily_candles(symbol, limit=60):
     try:
         ticker = yf.Ticker(symbol)
@@ -104,61 +104,83 @@ def fetch_daily_candles(symbol, limit=60):
         print(f"Daily fetch error for {symbol}: {e}")
         return None
 
+# Dedicated weekly fetcher
+def fetch_weekly_candles(symbol, limit=20):
+    try:
+        ticker = yf.Ticker(symbol)
+        history = ticker.history(period="6m", interval="1wk")
+        if history.empty: return None
+            
+        df = history.reset_index()
+        df.rename(columns={"Date": "timestamp", "Datetime": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        return df.tail(limit).copy()
+    except Exception as e:
+        print(f"Weekly fetch error for {symbol}: {e}")
+        return None
+
 # ==========================================
-# 🐘 DYNAMIC ADSZ ELEPHANT ZONE CALCULATOR ENGINE
+# 🐘 ADSZ ELEPHANT ZONE & AVERAGES ENGINE
 # ==========================================
-def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
+def calculate_adsz_levels(df_1d, df_1w, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
     if df_1d is None or len(df_1d) < d_atr_period + 2:
         return None
 
     df_calc = df_1d.copy()
     df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=d_atr_period)
     
-    # Extract shift(1) daily values matching Pine Script request.security
-    day_open = float(df_calc['open'].iloc[-1])
-    day_atr_prev = float(df_calc['atr'].iloc[-2])
-    day_close_prev = float(df_calc['close'].iloc[-2])
-    day_high_prev = float(df_calc['high'].iloc[-2])
-    day_low_prev = float(df_calc['low'].iloc[-2])
+    day_open = df_calc['open'].iloc[-1]
+    day_atr = df_calc['atr'].iloc[-2]
+    day_close_prev = df_calc['close'].iloc[-2]
+    day_high_prev = df_calc['high'].iloc[-2]
+    day_low_prev = df_calc['low'].iloc[-2]
 
-    if pd.isna(day_atr_prev) or day_close_prev == 0:
+    if pd.isna(day_atr) or day_close_prev == 0:
         return None
 
-    # Constants from Pine Script
+    # Constants
     phi = 1.618034
     sqrt2 = math.sqrt(2)
     sqrt252 = math.sqrt(252)
 
     # Volatility & Sigma Math
-    atr_ann_pct = (day_atr_prev / day_close_prev) * sqrt252 * 100.0
+    atr_ann_pct = (day_atr / day_close_prev) * sqrt252 * 100.0
     effvol = (d_slope * atr_ann_pct) + d_intercept
-
-    P = day_open
+    
+    P = round(day_open)
     sigma = (P * effvol) / (100.0 * sqrt252)
     dist_strong = sigma
     dist_weak = sigma / (2.0 * sqrt2)
-    ws = sigma / 4.0
-    ww = sigma / (4.0 * phi)
+    
+    ws = round(sigma / 4.0)
+    ww = round(sigma / (4.0 * phi))
 
-    # Zone Boundaries Math (Continuous bands)
-    sd_low   = P - dist_strong - (ws / 2.0)
-    sd_high  = P - dist_strong + (ws / 2.0)
-    wd_low   = P - dist_weak   - (ww / 2.0)
-    wd_high  = P - dist_weak   + (ww / 2.0)
-    wsp_low  = P + dist_weak   - (ww / 2.0)
-    wsp_high = P + dist_weak   + (ww / 2.0)
-    ss_low   = P + dist_strong - (ws / 2.0)
-    ss_high  = P + dist_strong + (ws / 2.0)
+    # Dynamic Zones
+    sd_low   = round(P - dist_strong - (ws / 2.0))
+    sd_high  = round(P - dist_strong + (ws / 2.0))
+    wd_low   = round(P - dist_weak - (ww / 2.0))
+    wd_high  = round(P - dist_weak + (ww / 2.0))
+    wsp_low  = round(P + dist_weak - (ww / 2.0))
+    wsp_high = round(P + dist_weak + (ww / 2.0))
+    ss_low   = round(P + dist_strong - (ws / 2.0))
+    ss_high  = round(P + dist_strong + (ws / 2.0))
+    
+    # 🎯 1. DAILY AVERAGE / DOTTED MIDLINE (dpoc)
+    dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
 
-    # Dotted Midline (Daily CPR Central Pivot of previous day)
-    dpoc = (day_high_prev + day_low_prev + day_close_prev) / 3.0
+    # 🎯 2. WEEKLY AVERAGE / WEEKLY POC (wpoc = P_w + 8)
+    wpoc = None
+    if df_1w is not None and not df_1w.empty:
+        week_open = df_1w['open'].iloc[-1]
+        p_w = round(week_open)
+        wpoc = p_w + 8.0
 
     return {
-        "Supply 2": {"top": ss_high, "bottom": ss_low},
-        "Supply 1": {"top": wsp_high, "bottom": wsp_low},
-        "Midline":  dpoc,
-        "Demand 1": {"top": wd_high, "bottom": wd_low},
-        "Demand 2": {"top": sd_high, "bottom": sd_low}
+        "Supply 2": {"top": float(ss_high), "bottom": float(ss_low)},
+        "Supply 1": {"top": float(wsp_high), "bottom": float(wsp_low)},
+        "Daily Midline": float(dpoc),
+        "Weekly Midline": float(wpoc) if wpoc is not None else None,
+        "Demand 1": {"top": float(wd_high), "bottom": float(wd_low)},
+        "Demand 2": {"top": float(sd_high), "bottom": float(sd_low)}
     }
 
 # ==========================================
@@ -428,8 +450,9 @@ def analyze_market(df_5m, symbol):
     df_1h  = df_temp.resample('1h').agg(resample_rules).dropna()
     df_4h  = df_temp.resample('4h').agg(resample_rules).dropna()
     
-    # Fetch dedicated daily data directly for Elephant Zones & Daily OC
+    # Fetch dedicated Daily & Weekly candles directly
     df_1d  = fetch_daily_candles(symbol)
+    df_1w  = fetch_weekly_candles(symbol)
 
     live_low = df_5m['low'].iloc[-1]
     live_high = df_5m['high'].iloc[-1]
@@ -452,24 +475,14 @@ def analyze_market(df_5m, symbol):
     evaluate_operator_oc_mtf(df_1d,  "1D",  symbol, live_rsi_5m, live_rsi_15m)
 
     # ----------------------------------------------------------
-    # SIGNAL 2: AUTOMATED ELEPHANT ADSZ ZONES & DOTTED MIDLINE TOUCHES
+    # SIGNAL 2: AUTOMATED ELEPHANT ADSZ ZONES & MIDLINE TOUCHES
     # ----------------------------------------------------------
-    dynamic_elephant_levels = calculate_adsz_levels(df_1d)
+    dynamic_elephant_levels = calculate_adsz_levels(df_1d, df_1w)
     
     if dynamic_elephant_levels:
-        # 🔍 DEBUG LOG: Print exact levels once per run to compare with TradingView
-        if symbol == "BTC-USD":
-            print(f"\n--- [DEBUG] {symbol} Price: ${live_close:,.2f} ---")
-            for k, v in dynamic_elephant_levels.items():
-                if k == "Midline":
-                    print(f"  • Midline: ${v:,.2f}")
-                else:
-                    print(f"  • {k}: ${v['bottom']:,.2f} to ${v['top']:,.2f}")
-            print("-------------------------------------------\n")
-
-        # Check Supply & Demand Zone Touches
+        # 1. Supply & Demand Zone Touches
         for key, limits in dynamic_elephant_levels.items():
-            if key == "Midline": continue
+            if "Midline" in key: continue
             if live_high >= limits["bottom"] and live_low <= limits["top"]:
                 process_alert(
                     f"{symbol}_{key.replace(' ', '_')}_Touch", 
@@ -479,16 +492,29 @@ def analyze_market(df_5m, symbol):
                     live_close, live_rsi_5m, live_rsi_15m
                 )
                 
-        # Dotted Midline touch check (Dynamic CPR Pivot)
-        mid_to_check = dynamic_elephant_levels.get("Midline")
-        midline_buffer = 15.0 if symbol == "BTC-USD" else 1.5
+        # 2. Daily Midline Touch Check (dpoc)
+        d_mid = dynamic_elephant_levels.get("Daily Midline")
+        d_buffer = 15.0 if symbol == "BTC-USD" else 1.5
         
-        if mid_to_check and (live_high >= (mid_to_check - midline_buffer)) and (live_low <= (mid_to_check + midline_buffer)):
+        if d_mid and (live_high >= (d_mid - d_buffer)) and (live_low <= (d_mid + d_buffer)):
             process_alert(
-                f"{symbol}_Midline_Touch", 
-                "Elephant Midline Touch", 
+                f"{symbol}_Daily_Midline_Touch", 
+                "Daily Midline Touch 🎯", 
                 symbol, 
-                f"Price touched Dotted Midline at `${mid_to_check:.2f}`", 
+                f"Price touched Daily Midline (CPR Pivot) at `${d_mid:.2f}`", 
+                live_close, live_rsi_5m, live_rsi_15m
+            )
+
+        # 3. Weekly Midline Touch Check (wpoc)
+        w_mid = dynamic_elephant_levels.get("Weekly Midline")
+        w_buffer = 25.0 if symbol == "BTC-USD" else 2.5
+        
+        if w_mid and (live_high >= (w_mid - w_buffer)) and (live_low <= (w_mid + w_buffer)):
+            process_alert(
+                f"{symbol}_Weekly_Midline_Touch", 
+                "Weekly Midline Touch 🎯", 
+                symbol, 
+                f"Price touched Weekly Midline (POC) at `${w_mid:.2f}`", 
                 live_close, live_rsi_5m, live_rsi_15m
             )
 
