@@ -76,16 +76,18 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Network error sending Make Webhook: {e}")
 
+# Optimized live fetch function to prevent yfinance caching delay
 def fetch_candles(symbol, limit=500):
     try:
         ticker = yf.Ticker(symbol)
-        history = ticker.history(period="60d", interval="5m")
+        history = ticker.history(period="7d", interval="5m")
         if history.empty: return None
             
         df = history.reset_index()
         df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
         return df.tail(limit).copy()
     except Exception as e:
+        print(f"Fetch error for {symbol}: {e}")
         return None
 
 # ==========================================
