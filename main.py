@@ -108,7 +108,7 @@ def fetch_daily_candles(symbol, limit=60):
         print(f"Daily fetch error for {symbol}: {e}")
         return None
 
-# Dedicated weekly fetcher with strict column fallback
+# Dedicated weekly fetcher
 def fetch_weekly_candles(symbol, limit=20):
     try:
         ticker = yf.Ticker(symbol)
@@ -171,10 +171,10 @@ def calculate_adsz_levels(df_1d, df_1w=None, d_atr_period=20, d_slope=0.69, d_in
         ss_low   = round(P + dist_strong - (ws / 2.0))
         ss_high  = round(P + dist_strong + (ws / 2.0))
         
-        # 🎯 1. DAILY AVERAGE / DOTTED MIDLINE (dpoc)
+        # Daily Average / Dotted Midline (dpoc)
         dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
 
-        # 🎯 2. WEEKLY AVERAGE / WEEKLY POC (wpoc = P_w + 8)
+        # Weekly Average / Weekly POC
         wpoc = None
         if df_1w is not None and not df_1w.empty and 'open' in df_1w.columns:
             week_open = df_1w['open'].iloc[-1]
@@ -287,7 +287,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
 # ==========================================
 # CORE ALERT PROCESSOR & DUAL ANTI-SPAM
 # ==========================================
-def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None):
+def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
@@ -297,13 +297,12 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
     bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
-    # Telegram Dispatch - 4 Hours Cooldown (14400 Seconds)
-    tg_cooldown = 14400  
+    # Telegram Dispatch with dynamic cooldown
     send_tg = False
 
     if alert_key not in tg_alert_cache:
         send_tg = True
-    elif (now - tg_alert_cache[alert_key]).total_seconds() >= tg_cooldown:
+    elif (now - tg_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
         send_tg = True
 
     if send_tg:
@@ -328,13 +327,12 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         )
         send_telegram_message(tg_message)
 
-    # SMS / Make Webhook Dispatch - 4 Hours Cooldown (14400 Seconds)
-    sms_cooldown = 14400  
+    # SMS / Make Webhook Dispatch
     send_sms = False
 
     if alert_key not in sms_alert_cache:
         send_sms = True
-    elif (now - sms_alert_cache[alert_key]).total_seconds() >= sms_cooldown:
+    elif (now - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
         send_sms = True
 
     if send_sms:
@@ -348,7 +346,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         send_make_webhook(sms_payload)
 
 # ==========================================
-# MULTI-TIMEFRAME EVALUATOR (OC CANDLES & TP BUBBLE CROSSOVERS)
+# MULTI-TIMEFRAME EVALUATOR
 # ==========================================
 def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
     if df_tf is None or len(df_tf) < 25:
@@ -368,7 +366,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
 
     if pd.isna(rsi_tf): return
 
-    pct_thresh = 0.005  # 0.5% Minimum Move
+    pct_thresh = 0.005
 
     tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_tf)
 
@@ -408,7 +406,7 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
             curr_close, rsi_5m, rsi_15m, tp_bubble=tp_bubble_text
         )
 
-    # 3. Strategy EMA Crossover Trigger (TP Bubble Signal)
+    # 3. Strategy EMA Crossover Trigger
     prev_fast, curr_fast = prev['fast_ema'], curr['fast_ema']
     prev_slow, curr_slow = prev['slow_ema'], curr['slow_ema']
 
@@ -445,7 +443,7 @@ def analyze_market(df_5m, symbol):
         # 5M RSI
         df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
         
-        # Resample Timeframes (15m, 1h, 4h) from intraday data
+        # Resample Timeframes
         df_temp = df_5m.copy()
         df_temp.set_index('timestamp', inplace=True)
         
@@ -461,7 +459,6 @@ def analyze_market(df_5m, symbol):
         df_1h  = df_temp.resample('1h').agg(resample_rules).dropna()
         df_4h  = df_temp.resample('4h').agg(resample_rules).dropna()
         
-        # Fetch dedicated Daily & Weekly candles directly
         df_1d  = fetch_daily_candles(symbol)
         df_1w  = fetch_weekly_candles(symbol)
 
@@ -491,16 +488,23 @@ def analyze_market(df_5m, symbol):
         dynamic_elephant_levels = calculate_adsz_levels(df_1d, df_1w)
         
         if dynamic_elephant_levels:
-            # 1. Supply & Demand Zone Touches
+            # 1. Supply & Demand Zone Touches (Reduced to 15-min cooldown to avoid blocking re-tests)
             for key, limits in dynamic_elephant_levels.items():
                 if "Midline" in key or limits is None or not isinstance(limits, dict): continue
-                if live_high >= limits["bottom"] and live_low <= limits["top"]:
+                
+                # Add $10 buffer for BTC to account for TradingView / Yahoo price spread
+                buf = 10.0 if symbol == "BTC-USD" else 0.5
+                zone_bottom = limits["bottom"] - buf
+                zone_top = limits["top"] + buf
+
+                if live_high >= zone_bottom and live_low <= zone_top:
                     process_alert(
                         f"{symbol}_{key.replace(' ', '_')}_Touch", 
                         f"Elephant Zone Touch ({key})", 
                         symbol, 
                         f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
-                        live_close, live_rsi_5m, live_rsi_15m
+                        live_close, live_rsi_5m, live_rsi_15m,
+                        cooldown_sec=900  # 15 minutes cooldown for zone re-tests
                     )
                     
             # 2. Daily Midline Touch Check (dpoc)
@@ -513,7 +517,8 @@ def analyze_market(df_5m, symbol):
                     "Daily Midline Touch 🎯", 
                     symbol, 
                     f"Price touched Daily Midline (CPR Pivot) at `${d_mid:.2f}`", 
-                    live_close, live_rsi_5m, live_rsi_15m
+                    live_close, live_rsi_5m, live_rsi_15m,
+                    cooldown_sec=900
                 )
 
             # 3. Weekly Midline Touch Check (wpoc)
@@ -526,7 +531,8 @@ def analyze_market(df_5m, symbol):
                     "Weekly Midline Touch 🎯", 
                     symbol, 
                     f"Price touched Weekly Midline (POC) at `${w_mid:.2f}`", 
-                    live_close, live_rsi_5m, live_rsi_15m
+                    live_close, live_rsi_5m, live_rsi_15m,
+                    cooldown_sec=900
                 )
 
         # ----------------------------------------------------------
