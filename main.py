@@ -504,7 +504,7 @@ def analyze_market(df_5m, symbol):
                         symbol, 
                         f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
                         live_close, live_rsi_5m, live_rsi_15m,
-                        cooldown_sec=900  # 15 minutes cooldown for zone re-tests
+                        cooldown_sec=0  # 15 minutes cooldown for zone re-tests
                     )
                     
             # 2. Daily Midline Touch Check (dpoc)
