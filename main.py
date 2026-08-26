@@ -56,6 +56,7 @@ DISPLAY_NAMES = {
 }
 
 tg_alert_cache = {}
+sms_alert_cache = {}
 
 # ==========================================
 # DISPATCH PIPELINES
@@ -107,7 +108,7 @@ def fetch_daily_candles(symbol):
         return None
 
 # ==========================================
-# 🐘 ADSZ ELEPHANT ZONE ENGINE (Pine Script v6 Exact Match)
+# 🐘 ADSZ ELEPHANT ZONE ENGINE
 # ==========================================
 def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
     try:
@@ -116,7 +117,6 @@ def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0)
 
         df_calc = df_1d.copy()
         
-        # Adjust ATR period safely if available history is slightly shorter
         atr_len = min(d_atr_period, len(df_calc) - 2)
         if atr_len < 1: atr_len = 1
         
@@ -169,18 +169,109 @@ def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0)
         return None
 
 # ==========================================
-# ALERT DISPATCHER (15-MINUTE COOLDOWN)
+# 💡 TP BUBBLE CALCULATION ENGINE
 # ==========================================
-def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None):
-    global tg_alert_cache
+def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0, sl1_val=1.5):
+    if df is None or len(df) < slow_len + atr_len:
+        return "TP1 50.0%", 1, 50.0
+
+    df_calc = df.copy()
+    df_calc['fast_ema'] = ta.ema(df_calc['close'], length=fast_len)
+    df_calc['slow_ema'] = ta.ema(df_calc['close'], length=slow_len)
+    df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=atr_len)
+
+    total_trades = 0
+    tp1_hits = 0
+    tp2_hits = 0
+    tp3_hits = 0
+
+    for i in range(slow_len, len(df_calc) - 20):
+        prev_fast, curr_fast = df_calc['fast_ema'].iloc[i-1], df_calc['fast_ema'].iloc[i]
+        prev_slow, curr_slow = df_calc['slow_ema'].iloc[i-1], df_calc['slow_ema'].iloc[i]
+        
+        crossover = (prev_fast <= prev_slow) and (curr_fast > curr_slow)
+        crossunder = (prev_fast >= prev_slow) and (curr_fast < curr_slow)
+
+        if crossover or crossunder:
+            direction = 1 if crossover else -1
+            entry_price = df_calc['close'].iloc[i]
+            atr_v = df_calc['atr'].iloc[i]
+            
+            if pd.isna(atr_v) or atr_v == 0:
+                continue
+
+            total_trades += 1
+            d_tp1 = entry_price + (direction * tp1_val * atr_v)
+            d_tp2 = entry_price + (direction * tp2_val * atr_v)
+            d_tp3 = entry_price + (direction * tp3_val * atr_v)
+
+            hit_1, hit_2, hit_3 = False, False, False
+
+            for j in range(i + 1, min(i + 30, len(df_calc))):
+                high_p = df_calc['high'].iloc[j]
+                low_p = df_calc['low'].iloc[j]
+
+                if direction == 1:
+                    if high_p >= d_tp1: hit_1 = True
+                    if high_p >= d_tp2: hit_2 = True
+                    if high_p >= d_tp3: hit_3 = True
+                else:
+                    if low_p <= d_tp1: hit_1 = True
+                    if low_p <= d_tp2: hit_2 = True
+                    if low_p <= d_tp3: hit_3 = True
+
+            if hit_1: tp1_hits += 1
+            if hit_2: tp2_hits += 1
+            if hit_3: tp3_hits += 1
+
+    tr = max(1, total_trades)
+    rate1 = tp1_hits / tr
+    rate2 = tp2_hits / tr
+    rate3 = tp3_hits / tr
+
+    d_tp1_dist = tp1_val
+    d_tp2_dist = tp2_val
+    d_tp3_dist = tp3_val
+    sl_dist = max(0.0001, sl1_val)
+
+    if suggest_metric == "Expected Profit":
+        v1, v2, v3 = rate1 * d_tp1_dist, rate2 * d_tp2_dist, rate3 * d_tp3_dist
+    elif suggest_metric == "Total Profit":
+        v1, v2, v3 = tp1_hits * d_tp1_dist, tp2_hits * d_tp2_dist, tp3_hits * d_tp3_dist
+    elif suggest_metric == "Risk/Reward":
+        v1, v2, v3 = d_tp1_dist / sl_dist, d_tp2_dist / sl_dist, d_tp3_dist / sl_dist
+    else:  # "Hit Rate"
+        v1, v2, v3 = rate1 * 100, rate2 * 100, rate3 * 100
+
+    best_v = v1
+    best_tp = 1
+    best_rate = rate1 * 100
+
+    if v2 > best_v:
+        best_v = v2
+        best_tp = 2
+        best_rate = rate2 * 100
+    if v3 > best_v:
+        best_v = v3
+        best_tp = 3
+        best_rate = rate3 * 100
+
+    bubble_text = f"TP{best_tp} {best_rate:.1f}%"
+    return bubble_text, best_tp, best_rate
+
+# ==========================================
+# CORE ALERT PROCESSOR (RESTORED ORIGINAL MESSAGE FORMAT)
+# ==========================================
+def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=900):
+    global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
     display_name = DISPLAY_NAMES.get(symbol, symbol)
     price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
+    bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
-    cooldown_sec = 900  # 15 minutes between alerts for the same level
     send_tg = False
 
     if alert_key not in tg_alert_cache:
@@ -191,17 +282,44 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     if send_tg:
         tg_alert_cache[alert_key] = now
         
+        # Original Dynamic Header Logic
+        if "Demand" in alert_type or "Bull" in alert_type or "BUY" in alert_type:
+            header = f"🟢 *[MACRO BUY SIGNAL]* 🟢"
+        elif "Supply" in alert_type or "Bear" in alert_type or "SELL" in alert_type:
+            header = f"🔴 *[MACRO SELL SIGNAL]* 🔴"
+        else:
+            header = f"🟡 *[GANN / ZONE SIGNAL]* 🟡"
+            
+        # Restored Original Message Template
         tg_message = (
-            f"🟢 *[ELEPHANT ZONE ALERT]* 🟢\n\n"
+            f"{header}\n\n"
             f"• *Asset:* `{display_name}`\n"
             f"• *Price:* `{price_str}`\n"
             f"• *RSI (5M):* `{rsi_5m_str}`\n"
             f"• *RSI (15M):* `{rsi_15m_str}`\n"
+            f"• *Suggested TP Bubble:* {bubble_str}\n"
             f"• *Signal Type:* `{alert_type}`\n"
             f"• *Details:* {message}"
         )
         send_telegram_message(tg_message)
-        send_make_webhook({"text": f"{display_name} | {alert_type} | {price_str}"})
+
+    # SMS / Make Webhook Dispatch
+    send_sms = False
+
+    if alert_key not in sms_alert_cache:
+        send_sms = True
+    elif (now - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
+        send_sms = True
+
+    if send_sms:
+        sms_alert_cache[alert_key] = now
+        alert_text = f"ALERT: {display_name} | {alert_type} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'}"
+        sms_payload = {
+            "body": alert_text,
+            "text": alert_text,
+            "message": alert_text
+        }
+        send_make_webhook(sms_payload)
 
 # ==========================================
 # MAIN SCANNER ROUTINE
@@ -231,6 +349,9 @@ def analyze_market(df_5m, symbol):
         else:
             live_rsi_15m = np.nan
 
+        # Calculate TP Bubble target recommendation
+        tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_5m)
+
         dynamic_elephant_levels = calculate_adsz_levels(df_1d)
         
         if dynamic_elephant_levels:
@@ -240,21 +361,21 @@ def analyze_market(df_5m, symbol):
                 if key == "Daily Midline" or not isinstance(limits, dict): 
                     continue
                 
-                # Buffer for feed spread
                 buf = 25.0 if symbol == "BTC-USD" else 1.0
                 z_bottom = limits["bottom"] - buf
                 z_top = limits["top"] + buf
 
-                # Triggers if price is currently inside or wick touches the zone
                 if (z_bottom <= live_close <= z_top) or (live_high >= z_bottom and live_low <= z_top):
                     process_alert(
                         alert_key=f"{symbol}_{key.replace(' ', '_')}_Touch", 
                         alert_type=f"Elephant Zone Touch ({key})", 
                         symbol=symbol, 
-                        message=f"Price ${live_close:,.2f} tested {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
+                        message=f"Price tested {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
                         price=live_close, 
                         rsi_5m=live_rsi_5m, 
-                        rsi_15m=live_rsi_15m
+                        rsi_15m=live_rsi_15m,
+                        tp_bubble=tp_bubble_text,
+                        cooldown_sec=900
                     )
         else:
             print(f"[{symbol}] Daily data unavailable for ADSZ calculation.")
@@ -267,7 +388,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Market Scanner Fully Online...")
-    send_telegram_message("🚀 *Elephant ADSZ Signal Engine Online* 🚀")
+    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Important Numbers\n  2. Operator OC Candles (15M, 1H, 4H, 1D)\n  3. Zone Touches\n  4. Trend Recommendations (15M, 1H, 4H, 1D)")
     
     while True:
         try:
