@@ -84,7 +84,9 @@ def fetch_candles(symbol, limit=500):
         if history.empty: return None
             
         df = history.reset_index()
-        df.rename(columns={"Datetime": "timestamp", "Date": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        cols = {c: c.lower() for c in df.columns}
+        df.rename(columns=cols, inplace=True)
+        df.rename(columns={"datetime": "timestamp", "date": "timestamp"}, inplace=True)
         return df.tail(limit).copy()
     except Exception as e:
         print(f"Fetch error for {symbol}: {e}")
@@ -98,13 +100,15 @@ def fetch_daily_candles(symbol, limit=60):
         if history.empty: return None
             
         df = history.reset_index()
-        df.rename(columns={"Date": "timestamp", "Datetime": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        cols = {c: c.lower() for c in df.columns}
+        df.rename(columns=cols, inplace=True)
+        df.rename(columns={"date": "timestamp", "datetime": "timestamp"}, inplace=True)
         return df.tail(limit).copy()
     except Exception as e:
         print(f"Daily fetch error for {symbol}: {e}")
         return None
 
-# Dedicated weekly fetcher
+# Dedicated weekly fetcher with strict column fallback
 def fetch_weekly_candles(symbol, limit=20):
     try:
         ticker = yf.Ticker(symbol)
@@ -112,7 +116,9 @@ def fetch_weekly_candles(symbol, limit=20):
         if history.empty: return None
             
         df = history.reset_index()
-        df.rename(columns={"Date": "timestamp", "Datetime": "timestamp", "Open": "open", "High": "high", "Low": "low", "Close": "close", "Volume": "volume"}, inplace=True)
+        cols = {c: c.lower() for c in df.columns}
+        df.rename(columns=cols, inplace=True)
+        df.rename(columns={"date": "timestamp", "datetime": "timestamp"}, inplace=True)
         return df.tail(limit).copy()
     except Exception as e:
         print(f"Weekly fetch error for {symbol}: {e}")
@@ -121,67 +127,71 @@ def fetch_weekly_candles(symbol, limit=20):
 # ==========================================
 # 🐘 ADSZ ELEPHANT ZONE & AVERAGES ENGINE
 # ==========================================
-def calculate_adsz_levels(df_1d, df_1w, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
-    if df_1d is None or len(df_1d) < d_atr_period + 2:
+def calculate_adsz_levels(df_1d, df_1w=None, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
+    try:
+        if df_1d is None or len(df_1d) < d_atr_period + 2:
+            return None
+
+        df_calc = df_1d.copy()
+        df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=d_atr_period)
+        
+        day_open = df_calc['open'].iloc[-1]
+        day_atr = df_calc['atr'].iloc[-2]
+        day_close_prev = df_calc['close'].iloc[-2]
+        day_high_prev = df_calc['high'].iloc[-2]
+        day_low_prev = df_calc['low'].iloc[-2]
+
+        if pd.isna(day_atr) or day_close_prev == 0:
+            return None
+
+        # Constants
+        phi = 1.618034
+        sqrt2 = math.sqrt(2)
+        sqrt252 = math.sqrt(252)
+
+        # Volatility & Sigma Math
+        atr_ann_pct = (day_atr / day_close_prev) * sqrt252 * 100.0
+        effvol = (d_slope * atr_ann_pct) + d_intercept
+        
+        P = round(day_open)
+        sigma = (P * effvol) / (100.0 * sqrt252)
+        dist_strong = sigma
+        dist_weak = sigma / (2.0 * sqrt2)
+        
+        ws = round(sigma / 4.0)
+        ww = round(sigma / (4.0 * phi))
+
+        # Dynamic Zones
+        sd_low   = round(P - dist_strong - (ws / 2.0))
+        sd_high  = round(P - dist_strong + (ws / 2.0))
+        wd_low   = round(P - dist_weak - (ww / 2.0))
+        wd_high  = round(P - dist_weak + (ww / 2.0))
+        wsp_low  = round(P + dist_weak - (ww / 2.0))
+        wsp_high = round(P + dist_weak + (ww / 2.0))
+        ss_low   = round(P + dist_strong - (ws / 2.0))
+        ss_high  = round(P + dist_strong + (ws / 2.0))
+        
+        # 🎯 1. DAILY AVERAGE / DOTTED MIDLINE (dpoc)
+        dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
+
+        # 🎯 2. WEEKLY AVERAGE / WEEKLY POC (wpoc = P_w + 8)
+        wpoc = None
+        if df_1w is not None and not df_1w.empty and 'open' in df_1w.columns:
+            week_open = df_1w['open'].iloc[-1]
+            p_w = round(week_open)
+            wpoc = p_w + 8.0
+
+        return {
+            "Supply 2": {"top": float(ss_high), "bottom": float(ss_low)},
+            "Supply 1": {"top": float(wsp_high), "bottom": float(wsp_low)},
+            "Daily Midline": float(dpoc),
+            "Weekly Midline": float(wpoc) if wpoc is not None else None,
+            "Demand 1": {"top": float(wd_high), "bottom": float(wd_low)},
+            "Demand 2": {"top": float(sd_high), "bottom": float(sd_low)}
+        }
+    except Exception as e:
+        print(f"Error in calculate_adsz_levels: {e}")
         return None
-
-    df_calc = df_1d.copy()
-    df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=d_atr_period)
-    
-    day_open = df_calc['open'].iloc[-1]
-    day_atr = df_calc['atr'].iloc[-2]
-    day_close_prev = df_calc['close'].iloc[-2]
-    day_high_prev = df_calc['high'].iloc[-2]
-    day_low_prev = df_calc['low'].iloc[-2]
-
-    if pd.isna(day_atr) or day_close_prev == 0:
-        return None
-
-    # Constants
-    phi = 1.618034
-    sqrt2 = math.sqrt(2)
-    sqrt252 = math.sqrt(252)
-
-    # Volatility & Sigma Math
-    atr_ann_pct = (day_atr / day_close_prev) * sqrt252 * 100.0
-    effvol = (d_slope * atr_ann_pct) + d_intercept
-    
-    P = round(day_open)
-    sigma = (P * effvol) / (100.0 * sqrt252)
-    dist_strong = sigma
-    dist_weak = sigma / (2.0 * sqrt2)
-    
-    ws = round(sigma / 4.0)
-    ww = round(sigma / (4.0 * phi))
-
-    # Dynamic Zones
-    sd_low   = round(P - dist_strong - (ws / 2.0))
-    sd_high  = round(P - dist_strong + (ws / 2.0))
-    wd_low   = round(P - dist_weak - (ww / 2.0))
-    wd_high  = round(P - dist_weak + (ww / 2.0))
-    wsp_low  = round(P + dist_weak - (ww / 2.0))
-    wsp_high = round(P + dist_weak + (ww / 2.0))
-    ss_low   = round(P + dist_strong - (ws / 2.0))
-    ss_high  = round(P + dist_strong + (ws / 2.0))
-    
-    # 🎯 1. DAILY AVERAGE / DOTTED MIDLINE (dpoc)
-    dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
-
-    # 🎯 2. WEEKLY AVERAGE / WEEKLY POC (wpoc = P_w + 8)
-    wpoc = None
-    if df_1w is not None and not df_1w.empty:
-        week_open = df_1w['open'].iloc[-1]
-        p_w = round(week_open)
-        wpoc = p_w + 8.0
-
-    return {
-        "Supply 2": {"top": float(ss_high), "bottom": float(ss_low)},
-        "Supply 1": {"top": float(wsp_high), "bottom": float(wsp_low)},
-        "Daily Midline": float(dpoc),
-        "Weekly Midline": float(wpoc) if wpoc is not None else None,
-        "Demand 1": {"top": float(wd_high), "bottom": float(wd_low)},
-        "Demand 2": {"top": float(sd_high), "bottom": float(sd_low)}
-    }
 
 # ==========================================
 # 💡 TP BUBBLE CALCULATION ENGINE
@@ -429,123 +439,126 @@ def evaluate_operator_oc_mtf(df_tf, tf_label, symbol, rsi_5m, rsi_15m):
 # MAIN SCANNER ROUTINE
 # ==========================================
 def analyze_market(df_5m, symbol):
-    if len(df_5m) < 45: return
-    
-    # 5M RSI
-    df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
-    
-    # Resample Timeframes (15m, 1h, 4h) from intraday data
-    df_temp = df_5m.copy()
-    df_temp.set_index('timestamp', inplace=True)
-    
-    resample_rules = {
-        'open': 'first',
-        'high': 'max',
-        'low': 'min',
-        'close': 'last',
-        'volume': 'sum'
-    }
-
-    df_15m = df_temp.resample('15min').agg(resample_rules).dropna()
-    df_1h  = df_temp.resample('1h').agg(resample_rules).dropna()
-    df_4h  = df_temp.resample('4h').agg(resample_rules).dropna()
-    
-    # Fetch dedicated Daily & Weekly candles directly
-    df_1d  = fetch_daily_candles(symbol)
-    df_1w  = fetch_weekly_candles(symbol)
-
-    live_low = df_5m['low'].iloc[-1]
-    live_high = df_5m['high'].iloc[-1]
-    live_close = df_5m['close'].iloc[-1]
-    
-    live_rsi_5m = df_5m['rsi_5m'].iloc[-1]
-    
-    if df_15m is not None and not df_15m.empty:
-        df_15m['rsi'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
-        live_rsi_15m = df_15m['rsi'].iloc[-1]
-    else:
-        live_rsi_15m = np.nan
-
-    # ----------------------------------------------------------
-    # SIGNAL 1: MTF OPERATOR OC CANDLES & EMA CROSSOVER BUBBLE
-    # ----------------------------------------------------------
-    evaluate_operator_oc_mtf(df_15m, "15M", symbol, live_rsi_5m, live_rsi_15m)
-    evaluate_operator_oc_mtf(df_1h,  "1H",  symbol, live_rsi_5m, live_rsi_15m)
-    evaluate_operator_oc_mtf(df_4h,  "4H",  symbol, live_rsi_5m, live_rsi_15m)
-    evaluate_operator_oc_mtf(df_1d,  "1D",  symbol, live_rsi_5m, live_rsi_15m)
-
-    # ----------------------------------------------------------
-    # SIGNAL 2: AUTOMATED ELEPHANT ADSZ ZONES & MIDLINE TOUCHES
-    # ----------------------------------------------------------
-    dynamic_elephant_levels = calculate_adsz_levels(df_1d, df_1w)
-    
-    if dynamic_elephant_levels:
-        # 1. Supply & Demand Zone Touches
-        for key, limits in dynamic_elephant_levels.items():
-            if "Midline" in key: continue
-            if live_high >= limits["bottom"] and live_low <= limits["top"]:
-                process_alert(
-                    f"{symbol}_{key.replace(' ', '_')}_Touch", 
-                    f"Elephant Zone Touch ({key})", 
-                    symbol, 
-                    f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
-                    live_close, live_rsi_5m, live_rsi_15m
-                )
-                
-        # 2. Daily Midline Touch Check (dpoc)
-        d_mid = dynamic_elephant_levels.get("Daily Midline")
-        d_buffer = 15.0 if symbol == "BTC-USD" else 1.5
+    try:
+        if len(df_5m) < 45: return
         
-        if d_mid and (live_high >= (d_mid - d_buffer)) and (live_low <= (d_mid + d_buffer)):
-            process_alert(
-                f"{symbol}_Daily_Midline_Touch", 
-                "Daily Midline Touch 🎯", 
-                symbol, 
-                f"Price touched Daily Midline (CPR Pivot) at `${d_mid:.2f}`", 
-                live_close, live_rsi_5m, live_rsi_15m
-            )
-
-        # 3. Weekly Midline Touch Check (wpoc)
-        w_mid = dynamic_elephant_levels.get("Weekly Midline")
-        w_buffer = 25.0 if symbol == "BTC-USD" else 2.5
+        # 5M RSI
+        df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
         
-        if w_mid and (live_high >= (w_mid - w_buffer)) and (live_low <= (w_mid + w_buffer)):
-            process_alert(
-                f"{symbol}_Weekly_Midline_Touch", 
-                "Weekly Midline Touch 🎯", 
-                symbol, 
-                f"Price touched Weekly Midline (POC) at `${w_mid:.2f}`", 
-                live_close, live_rsi_5m, live_rsi_15m
-            )
-
-    # ----------------------------------------------------------
-    # SIGNAL 3: DYNAMIC GANN NUMBER LEVEL TOUCHES
-    # ----------------------------------------------------------
-    if df_1d is not None and len(df_1d) >= 2:
-        prev_close = df_1d['close'].iloc[-2]
-        base_sqrt = round(math.sqrt(prev_close))
+        # Resample Timeframes (15m, 1h, 4h) from intraday data
+        df_temp = df_5m.copy()
+        df_temp.set_index('timestamp', inplace=True)
         
-        gann_levels = {
-            "Base Level": base_sqrt ** 2, 
-            "Bull +1": (base_sqrt + 1.0) ** 2, 
-            "Bull +2": (base_sqrt + 2.0) ** 2, 
-            "Bull +3": (base_sqrt + 3.0) ** 2,
-            "Bear -1": (base_sqrt - 1.0) ** 2, 
-            "Bear -2": (base_sqrt - 2.0) ** 2, 
-            "Bear -3": (base_sqrt - 3.0) ** 2
+        resample_rules = {
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
         }
+
+        df_15m = df_temp.resample('15min').agg(resample_rules).dropna()
+        df_1h  = df_temp.resample('1h').agg(resample_rules).dropna()
+        df_4h  = df_temp.resample('4h').agg(resample_rules).dropna()
         
-        buffer = live_close * 0.0002
+        # Fetch dedicated Daily & Weekly candles directly
+        df_1d  = fetch_daily_candles(symbol)
+        df_1w  = fetch_weekly_candles(symbol)
+
+        live_low = df_5m['low'].iloc[-1]
+        live_high = df_5m['high'].iloc[-1]
+        live_close = df_5m['close'].iloc[-1]
         
-        for g_name, g_level in gann_levels.items():
-            if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
+        live_rsi_5m = df_5m['rsi_5m'].iloc[-1]
+        
+        if df_15m is not None and not df_15m.empty:
+            df_15m['rsi'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
+            live_rsi_15m = df_15m['rsi'].iloc[-1]
+        else:
+            live_rsi_15m = np.nan
+
+        # ----------------------------------------------------------
+        # SIGNAL 1: MTF OPERATOR OC CANDLES & EMA CROSSOVER BUBBLE
+        # ----------------------------------------------------------
+        evaluate_operator_oc_mtf(df_15m, "15M", symbol, live_rsi_5m, live_rsi_15m)
+        evaluate_operator_oc_mtf(df_1h,  "1H",  symbol, live_rsi_5m, live_rsi_15m)
+        evaluate_operator_oc_mtf(df_4h,  "4H",  symbol, live_rsi_5m, live_rsi_15m)
+        evaluate_operator_oc_mtf(df_1d,  "1D",  symbol, live_rsi_5m, live_rsi_15m)
+
+        # ----------------------------------------------------------
+        # SIGNAL 2: AUTOMATED ELEPHANT ADSZ ZONES & MIDLINE TOUCHES
+        # ----------------------------------------------------------
+        dynamic_elephant_levels = calculate_adsz_levels(df_1d, df_1w)
+        
+        if dynamic_elephant_levels:
+            # 1. Supply & Demand Zone Touches
+            for key, limits in dynamic_elephant_levels.items():
+                if "Midline" in key or limits is None or not isinstance(limits, dict): continue
+                if live_high >= limits["bottom"] and live_low <= limits["top"]:
+                    process_alert(
+                        f"{symbol}_{key.replace(' ', '_')}_Touch", 
+                        f"Elephant Zone Touch ({key})", 
+                        symbol, 
+                        f"Price touched {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
+                        live_close, live_rsi_5m, live_rsi_15m
+                    )
+                    
+            # 2. Daily Midline Touch Check (dpoc)
+            d_mid = dynamic_elephant_levels.get("Daily Midline")
+            d_buffer = 15.0 if symbol == "BTC-USD" else 1.5
+            
+            if d_mid and (live_high >= (d_mid - d_buffer)) and (live_low <= (d_mid + d_buffer)):
                 process_alert(
-                    f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", 
-                    f"Gann Number Touch ({g_name})", 
+                    f"{symbol}_Daily_Midline_Touch", 
+                    "Daily Midline Touch 🎯", 
                     symbol, 
-                    f"Price tested Gann Level `{g_name}` at `${g_level:.2f}`", 
+                    f"Price touched Daily Midline (CPR Pivot) at `${d_mid:.2f}`", 
                     live_close, live_rsi_5m, live_rsi_15m
                 )
+
+            # 3. Weekly Midline Touch Check (wpoc)
+            w_mid = dynamic_elephant_levels.get("Weekly Midline")
+            w_buffer = 25.0 if symbol == "BTC-USD" else 2.5
+            
+            if w_mid and (live_high >= (w_mid - w_buffer)) and (live_low <= (w_mid + w_buffer)):
+                process_alert(
+                    f"{symbol}_Weekly_Midline_Touch", 
+                    "Weekly Midline Touch 🎯", 
+                    symbol, 
+                    f"Price touched Weekly Midline (POC) at `${w_mid:.2f}`", 
+                    live_close, live_rsi_5m, live_rsi_15m
+                )
+
+        # ----------------------------------------------------------
+        # SIGNAL 3: DYNAMIC GANN NUMBER LEVEL TOUCHES
+        # ----------------------------------------------------------
+        if df_1d is not None and len(df_1d) >= 2:
+            prev_close = df_1d['close'].iloc[-2]
+            base_sqrt = round(math.sqrt(prev_close))
+            
+            gann_levels = {
+                "Base Level": base_sqrt ** 2, 
+                "Bull +1": (base_sqrt + 1.0) ** 2, 
+                "Bull +2": (base_sqrt + 2.0) ** 2, 
+                "Bull +3": (base_sqrt + 3.0) ** 2,
+                "Bear -1": (base_sqrt - 1.0) ** 2, 
+                "Bear -2": (base_sqrt - 2.0) ** 2, 
+                "Bear -3": (base_sqrt - 3.0) ** 2
+            }
+            
+            buffer = live_close * 0.0002
+            
+            for g_name, g_level in gann_levels.items():
+                if live_high >= (g_level - buffer) and live_low <= (g_level + buffer):
+                    process_alert(
+                        f"{symbol}_Gann_{g_name.replace(' ', '_').replace('(', '').replace(')', '')}", 
+                        f"Gann Number Touch ({g_name})", 
+                        symbol, 
+                        f"Price tested Gann Level `{g_name}` at `${g_level:.2f}`", 
+                        live_close, live_rsi_5m, live_rsi_15m
+                    )
+    except Exception as e:
+        print(f"Error analyzing market for {symbol}: {e}")
 
 # ==========================================
 # RUNTIME SCANNER LIFECYCLE
