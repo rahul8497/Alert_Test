@@ -39,7 +39,6 @@ def run_web_server():
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 
 TELEGRAM_CHAT_IDS = [
-    "-5385748601",  # 📡 Signal Telegram Group
     "1136613703"    # Personal Telegram ID
 ]
 
@@ -76,7 +75,7 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Error sending Make Webhook: {e}")
 
-# Robust Fetch Functions using yf.download to bypass rate limits
+# Data fetching routines
 def fetch_candles(symbol):
     try:
         df = yf.download(symbol, period="7d", interval="5m", progress=False)
@@ -108,7 +107,7 @@ def fetch_daily_candles(symbol):
         return None
 
 # ==========================================
-# 🐘 ADSZ ELEPHANT ZONE ENGINE
+# 🐘 ADSZ ELEPHANT ZONE ENGINE (05:30 AM IST ALIGNED)
 # ==========================================
 def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
     try:
@@ -260,7 +259,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
     return bubble_text, best_tp, best_rate
 
 # ==========================================
-# CORE ALERT PROCESSOR (RESTORED ORIGINAL MESSAGE FORMAT)
+# CORE ALERT PROCESSOR
 # ==========================================
 def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=900):
     global tg_alert_cache, sms_alert_cache
@@ -282,7 +281,6 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     if send_tg:
         tg_alert_cache[alert_key] = now
         
-        # Original Dynamic Header Logic
         if "Demand" in alert_type or "Bull" in alert_type or "BUY" in alert_type:
             header = f"🟢 *[MACRO BUY SIGNAL]* 🟢"
         elif "Supply" in alert_type or "Bear" in alert_type or "SELL" in alert_type:
@@ -290,7 +288,6 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         else:
             header = f"🟡 *[GANN / ZONE SIGNAL]* 🟡"
             
-        # Restored Original Message Template
         tg_message = (
             f"{header}\n\n"
             f"• *Asset:* `{display_name}`\n"
@@ -303,7 +300,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         )
         send_telegram_message(tg_message)
 
-    # SMS / Make Webhook Dispatch
+    # Make Webhook Dispatch
     send_sms = False
 
     if alert_key not in sms_alert_cache:
@@ -349,9 +346,7 @@ def analyze_market(df_5m, symbol):
         else:
             live_rsi_15m = np.nan
 
-        # Calculate TP Bubble target recommendation
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_5m)
-
         dynamic_elephant_levels = calculate_adsz_levels(df_1d)
         
         if dynamic_elephant_levels:
@@ -388,7 +383,7 @@ def analyze_market(df_5m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"Market Scanner Fully Online...")
-    send_telegram_message("🚀 *Focused Signal Engine Online* 🚀\n• Enabled Alerts ONLY for:\n  1. Important Numbers\n  2. Operator OC Candles (15M, 1H, 4H, 1D)\n  3. Zone Touches\n  4. Trend Recommendations (15M, 1H, 4H, 1D)")
+    send_telegram_message("🚀 *Elephant ADSZ Engine Online* 🚀\n• Actively scanning BTC, ETH, PAXG for Zone Touches and Dynamic TP targets.")
     
     while True:
         try:
