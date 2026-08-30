@@ -336,17 +336,17 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE (CLOSED 15M CANDLES)
+# MAIN SCANNER ROUTINE (15M CLOSED CANDLES)
 # ==========================================
 def analyze_market(df_15m, symbol):
     try:
-        # Require enough bars to evaluate completed candle (iloc[-2])
-        if df_15m is None or len(df_15m) < 30: return
+        # Require enough historical data for completed candle checks
+        if df_15m is None or len(df_15m) < 50: return
         
+        # Calculate RSIs on confirmed closed candle (iloc[-2])
         df_15m['rsi_15m'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
-        live_rsi_15m = float(df_15m['rsi_15m'].iloc[-2]) # Evaluated on closed candle
+        live_rsi_15m = float(df_15m['rsi_15m'].iloc[-2])
 
-        # Fetch 5m candles specifically to get 5m RSI metric
         df_5m = fetch_candles(symbol, interval="5m", period="2d")
         if df_5m is not None and not df_5m.empty:
             df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
@@ -360,60 +360,70 @@ def analyze_market(df_15m, symbol):
 
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_15m)
 
-        # 1. KNN LINE CROSSOVER ALERTS (Completed Candles: -2 vs -3)
+        # ---------------------------------------------------------------------
+        # 1. AI TREND NAVIGATOR (kNN LINE CROSSOVER ALERTS)
+        # ---------------------------------------------------------------------
         df_knn = calculate_knn_trend(df_15m)
         if df_knn is not None and 'knn_ma_smooth' in df_knn.columns and len(df_knn) >= 3:
             knn_curr = df_knn['knn_ma_smooth'].iloc[-2]  # Just closed candle
-            knn_prev = df_knn['knn_ma_smooth'].iloc[-3]  # Prior closed candle
+            knn_prev = df_knn['knn_ma_smooth'].iloc[-3]  # Previous closed candle
             ma_knn_curr = df_knn['ma_knn'].iloc[-2]
             ma_knn_prev = df_knn['ma_knn'].iloc[-3]
 
+            # Bullish Crossover (Green Line Trend Switch)
             if (knn_prev <= ma_knn_prev) and (knn_curr > ma_knn_curr):
                 process_alert(
                     alert_key=f"{symbol}_KNN_Bullish_Cross_15m",
-                    alert_type="kNN Crossover Average Bullish (15M)",
+                    alert_type="AI Trend Navigator Bullish Cross (15M)",
                     symbol=symbol,
-                    message="15M kNN Classifier Line crossed ABOVE Average kNN Line.",
+                    message="AI Trend Navigator fast line crossed ABOVE average line (Bullish Trend Switch).",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
+            # Bearish Crossunder (Red Line Trend Switch)
             elif (knn_prev >= ma_knn_prev) and (knn_curr < ma_knn_curr):
                 process_alert(
                     alert_key=f"{symbol}_KNN_Bearish_Cross_15m",
-                    alert_type="kNN Crossunder Average Bearish (15M)",
+                    alert_type="AI Trend Navigator Bearish Cross (15M)",
                     symbol=symbol,
-                    message="15M kNN Classifier Line crossed BELOW Average kNN Line.",
+                    message="AI Trend Navigator fast line crossed BELOW average line (Bearish Trend Switch).",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
-        # 2. LORENTZIAN CLASSIFICATION ML FORMATION ALERTS (Completed Candles: -2 vs -3)
+        # ---------------------------------------------------------------------
+        # 2. LORENTZIAN CLASSIFICATION (SHAPE SIGNAL ALERTS ON CANDLE CLOSE)
+        # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_15m)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
-            ml_sig_curr = df_ml['ml_signal'].iloc[-2]
-            ml_sig_prev = df_ml['ml_signal'].iloc[-3]
+            ml_sig_curr = df_ml['ml_signal'].iloc[-2] # Closed candle prediction
+            ml_sig_prev = df_ml['ml_signal'].iloc[-3] # Prior bar prediction
             ml_pred = df_ml['ml_prediction'].iloc[-2]
 
+            # Green Pentagon Shape (Bullish Formation)
             if ml_sig_curr == 1 and ml_sig_prev != 1:
                 process_alert(
-                    alert_key=f"{symbol}_ML_Buy_Signal_15m",
-                    alert_type="Lorentzian ML Buy Signal (15M)",
+                    alert_key=f"{symbol}_Lorentzian_Green_Shape_15m",
+                    alert_type="Lorentzian ML Buy Shape (15M)",
                     symbol=symbol,
-                    message=f"15M Machine Learning classification formed positive prediction score: `+{ml_pred}`",
+                    message=f"🟢 Green Buy shape confirmed on candle close! Score: `+{ml_pred}`",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
+            # Red Pentagon Shape (Bearish Formation)
             elif ml_sig_curr == -1 and ml_sig_prev != -1:
                 process_alert(
-                    alert_key=f"{symbol}_ML_Sell_Signal_15m",
-                    alert_type="Lorentzian ML Sell Signal (15M)",
+                    alert_key=f"{symbol}_Lorentzian_Red_Shape_15m",
+                    alert_type="Lorentzian ML Sell Shape (15M)",
                     symbol=symbol,
-                    message=f"15M Machine Learning classification formed negative prediction score: `{ml_pred}`",
+                    message=f"🔴 Red Sell shape confirmed on candle close! Score: `{ml_pred}`",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
-        # 3. HTF LEVEL TOUCH ALERTS
+        # ---------------------------------------------------------------------
+        # 3. HTF LEVEL TOUCH ALERTS (PDH, PDL, PP, GANN BASE, PWH, PWL, PMH, PML)
+        # ---------------------------------------------------------------------
         htf_levels = calculate_htf_levels(symbol)
         if htf_levels:
             buf = 25.0 if symbol == "BTC-USD" else 0.1
