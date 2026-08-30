@@ -27,7 +27,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE | Elephant ADSZ Scanner Active", 200
+    return "Bot Matrix Status: ONLINE | 15M Pine Script Scanner Active", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -45,14 +45,15 @@ TELEGRAM_CHAT_IDS = [
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
-# 📋 WATCHLIST
+# 📋 WATCHLIST & CONFIGURATION (BTC, GOLD, 15M, 4H COOLDOWN)
 # ==========================================
-ACTIVE_SYMBOLS = ["BTC-USD", "ETH-USD", "PAXG-USD"]
+ACTIVE_SYMBOLS = ["BTC-USD", "PAXG-USD"]
 DISPLAY_NAMES = {
     "BTC-USD": "BITCOIN (BTC/USD)",
-    "ETH-USD": "ETHEREUM (ETH/USD)",
     "PAXG-USD": "GOLD SPOT (PAXG/USD)"
 }
+
+ALERT_COOLDOWN_SEC = 14400  # 4 Hours Cooldown (in seconds)
 
 tg_alert_cache = {}
 sms_alert_cache = {}
@@ -75,10 +76,9 @@ def send_make_webhook(alert_data):
     except Exception as e:
         print(f"Error sending Make Webhook: {e}")
 
-# Data fetching routines
-def fetch_candles(symbol):
+def fetch_candles(symbol, interval="15m", period="7d"):
     try:
-        df = yf.download(symbol, period="7d", interval="5m", progress=False)
+        df = yf.download(symbol, period=period, interval=interval, progress=False)
         if df.empty: return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -88,84 +88,128 @@ def fetch_candles(symbol):
         df.rename(columns={"datetime": "timestamp", "date": "timestamp"}, inplace=True)
         return df
     except Exception as e:
-        print(f"Intraday fetch error for {symbol}: {e}")
+        print(f"Candle fetch error for {symbol} ({interval}): {e}")
         return None
 
-def fetch_daily_candles(symbol):
-    try:
-        df = yf.download(symbol, period="6m", interval="1d", progress=False)
-        if df.empty: return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df.reset_index(inplace=True)
-        cols = {c: str(c).lower() for c in df.columns}
-        df.rename(columns=cols, inplace=True)
-        df.rename(columns={"date": "timestamp", "datetime": "timestamp"}, inplace=True)
+# ==========================================
+# 📈 PINE SCRIPT MATH ENGINE CONVERSIONS
+# ==========================================
+
+# SECTION 1: AI TREND NAVIGATOR (kNN Moving Average)
+def calculate_knn_trend(df, ma_len=5, ma_len_target=5, num_closest=3, smoothing_period=50):
+    if df is None or len(df) < max(ma_len, ma_len_target, smoothing_period) + 30:
         return df
-    except Exception as e:
-        print(f"Daily fetch error for {symbol}: {e}")
-        return None
 
-# ==========================================
-# 🐘 ADSZ ELEPHANT ZONE ENGINE (05:30 AM IST ALIGNED)
-# ==========================================
-def calculate_adsz_levels(df_1d, d_atr_period=20, d_slope=0.69, d_intercept=0.0):
-    try:
-        if df_1d is None or len(df_1d) < 5:
-            return None
+    df_calc = df.copy()
+    df_calc['hl2'] = (df_calc['high'] + df_calc['low']) / 2.0
+    value_in = ta.sma(df_calc['hl2'], length=ma_len)
+    target_in = ta.rma(df_calc['close'], length=ma_len_target)
 
-        df_calc = df_1d.copy()
+    window_size = max(num_closest, 30)
+    knn_ma = []
+
+    for idx in range(len(df_calc)):
+        if idx < window_size:
+            knn_ma.append(np.nan)
+            continue
         
-        atr_len = min(d_atr_period, len(df_calc) - 2)
-        if atr_len < 1: atr_len = 1
-        
-        df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=atr_len)
-        
-        day_open = float(df_calc['open'].iloc[-1])
-        day_atr = float(df_calc['atr'].iloc[-2]) if not pd.isna(df_calc['atr'].iloc[-2]) else float(df_calc['atr'].iloc[-1])
-        day_close_prev = float(df_calc['close'].iloc[-2])
-        day_high_prev = float(df_calc['high'].iloc[-2])
-        day_low_prev = float(df_calc['low'].iloc[-2])
+        target_val = target_in.iloc[idx]
+        if pd.isna(target_val):
+            knn_ma.append(np.nan)
+            continue
 
-        if pd.isna(day_atr) or day_close_prev == 0:
-            day_atr = float(df_calc['high'].iloc[-2] - df_calc['low'].iloc[-2])
+        distances = []
+        for i in range(1, window_size + 1):
+            v = value_in.iloc[idx - i]
+            if not pd.isna(v):
+                dist = abs(target_val - v)
+                distances.append((dist, v))
 
-        phi = 1.618034
-        sqrt2 = math.sqrt(2)
-        sqrt252 = math.sqrt(252)
+        if len(distances) < num_closest:
+            knn_ma.append(np.nan)
+            continue
 
-        atr_ann_pct = (day_atr / day_close_prev) * sqrt252 * 100.0
-        effvol = (d_slope * atr_ann_pct) + d_intercept
+        distances.sort(key=lambda x: x[0])
+        closest_vals = [x[1] for x in distances[:num_closest]]
+        knn_ma.append(np.mean(closest_vals))
+
+    df_calc['knn_ma'] = knn_ma
+    df_calc['knn_ma_smooth'] = ta.wma(df_calc['knn_ma'], length=5)
+    df_calc['ma_knn'] = ta.rma(df_calc['knn_ma'], length=smoothing_period)
+
+    return df_calc
+
+# SECTION 2: HTF LEVELS, PIVOT POINTS & GANN BASE LINE
+def calculate_htf_levels(symbol):
+    df_d = fetch_candles(symbol, interval="1d", period="30d")
+    df_w = fetch_candles(symbol, interval="1wk", period="60d")
+    df_m = fetch_candles(symbol, interval="1mo", period="180d")
+
+    if df_d is None or len(df_d) < 2: return None
+
+    # Previous Day Levels
+    pdc = float(df_d['close'].iloc[-2])
+    pdh = float(df_d['high'].iloc[-2])
+    pdl = float(df_d['low'].iloc[-2])
+    pdp = (pdc + pdh + pdl) / 3.0
+
+    # Gann Base Line Level
+    gann_base_sqrt = round(math.sqrt(pdc))
+    gann_base_level = float(gann_base_sqrt ** 2)
+
+    # Previous Week Levels
+    pwh = float(df_w['high'].iloc[-2]) if df_w is not None and len(df_w) >= 2 else np.nan
+    pwl = float(df_w['low'].iloc[-2]) if df_w is not None and len(df_w) >= 2 else np.nan
+
+    # Previous Month Levels
+    pmh = float(df_m['high'].iloc[-2]) if df_m is not None and len(df_m) >= 2 else np.nan
+    pml = float(df_m['low'].iloc[-2]) if df_m is not None and len(df_m) >= 2 else np.nan
+
+    return {
+        "PDH": pdh, "PDL": pdl, "PP": pdp, "Gann Base": gann_base_level,
+        "PWH": pwh, "PWL": pwl, "PMH": pmh, "PML": pml
+    }
+
+# SECTION 3: LORENTZIAN CLASSIFICATION ML ENGINE
+def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=2000):
+    if df is None or len(df) < 50:
+        return df
+
+    df_calc = df.copy()
+    df_calc['hlc3'] = (df_calc['high'] + df_calc['low'] + df_calc['close']) / 3.0
+    
+    f1 = ta.rsi(df_calc['close'], length=14)
+    f2 = ta.rsi(df_calc['hlc3'], length=10)
+    f3 = ta.cci(df_calc['high'], df_calc['low'], df_calc['close'], length=20)
+    f4 = ta.adx(df_calc['high'], df_calc['low'], df_calc['close'], length=20)['ADX_20']
+    f5 = ta.rsi(df_calc['close'], length=9)
+
+    features = pd.concat([f1, f2, f3, f4, f5], axis=1).fillna(0).values
+    close_vals = df_calc['close'].values
+    
+    y_train = np.zeros(len(df_calc))
+    for i in range(4, len(df_calc)):
+        if close_vals[i-4] < close_vals[i]:
+            y_train[i] = 1
+        elif close_vals[i-4] > close_vals[i]:
+            y_train[i] = -1
+
+    predictions = np.zeros(len(df_calc))
+    start_idx = max(50, len(df_calc) - max_bars_back)
+    
+    for idx in range(start_idx, len(df_calc)):
+        curr_feat = features[idx]
+        feat_diffs = np.abs(features[start_idx:idx] - curr_feat)
+        lorentzian_dists = np.sum(np.log1p(feat_diffs), axis=1)
         
-        P = round(day_open)
-        sigma = (P * effvol) / (100.0 * sqrt252)
-        dist_strong = sigma
-        dist_weak = sigma / (2.0 * sqrt2)
-        
-        ws = round(sigma / 4.0)
-        ww = round(sigma / (4.0 * phi))
+        if len(lorentzian_dists) >= neighbors_count:
+            nearest_indices = np.argsort(lorentzian_dists)[:neighbors_count]
+            pred_val = np.sum(y_train[start_idx + nearest_indices])
+            predictions[idx] = pred_val
 
-        sd_low   = round(P - dist_strong - (ws / 2.0))
-        sd_high  = round(P - dist_strong + (ws / 2.0))
-        wd_low   = round(P - dist_weak - (ww / 2.0))
-        wd_high  = round(P - dist_weak + (ww / 2.0))
-        wsp_low  = round(P + dist_weak - (ww / 2.0))
-        wsp_high = round(P + dist_weak + (ww / 2.0))
-        ss_low   = round(P + dist_strong - (ws / 2.0))
-        ss_high  = round(P + dist_strong + (ws / 2.0))
-        
-        dpoc = round((day_high_prev + day_low_prev + day_close_prev) / 3.0)
-
-        return {
-            "Supply 2": {"top": float(ss_high), "bottom": float(ss_low)},
-            "Supply 1": {"top": float(wsp_high), "bottom": float(wsp_low)},
-            "Daily Midline": float(dpoc),
-            "Demand 1": {"top": float(wd_high), "bottom": float(wd_low)},
-            "Demand 2": {"top": float(sd_high), "bottom": float(sd_low)}
-        }
-    except Exception as e:
-        print(f"Error calculating ADSZ: {e}")
-        return None
+    df_calc['ml_prediction'] = predictions
+    df_calc['ml_signal'] = np.where(predictions > 0, 1, np.where(predictions < 0, -1, 0))
+    return df_calc
 
 # ==========================================
 # 💡 TP BUBBLE CALCULATION ENGINE
@@ -179,10 +223,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
     df_calc['slow_ema'] = ta.ema(df_calc['close'], length=slow_len)
     df_calc['atr'] = ta.atr(df_calc['high'], df_calc['low'], df_calc['close'], length=atr_len)
 
-    total_trades = 0
-    tp1_hits = 0
-    tp2_hits = 0
-    tp3_hits = 0
+    total_trades, tp1_hits, tp2_hits, tp3_hits = 0, 0, 0, 0
 
     for i in range(slow_len, len(df_calc) - 20):
         prev_fast, curr_fast = df_calc['fast_ema'].iloc[i-1], df_calc['fast_ema'].iloc[i]
@@ -196,8 +237,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
             entry_price = df_calc['close'].iloc[i]
             atr_v = df_calc['atr'].iloc[i]
             
-            if pd.isna(atr_v) or atr_v == 0:
-                continue
+            if pd.isna(atr_v) or atr_v == 0: continue
 
             total_trades += 1
             d_tp1 = entry_price + (direction * tp1_val * atr_v)
@@ -224,36 +264,18 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
             if hit_3: tp3_hits += 1
 
     tr = max(1, total_trades)
-    rate1 = tp1_hits / tr
-    rate2 = tp2_hits / tr
-    rate3 = tp3_hits / tr
+    rate1, rate2, rate3 = tp1_hits / tr, tp2_hits / tr, tp3_hits / tr
+    v1, v2, v3 = rate1 * 100, rate2 * 100, rate3 * 100
 
-    d_tp1_dist = tp1_val
-    d_tp2_dist = tp2_val
-    d_tp3_dist = tp3_val
-    sl_dist = max(0.0001, sl1_val)
-
-    if suggest_metric == "Expected Profit":
-        v1, v2, v3 = rate1 * d_tp1_dist, rate2 * d_tp2_dist, rate3 * d_tp3_dist
-    elif suggest_metric == "Total Profit":
-        v1, v2, v3 = tp1_hits * d_tp1_dist, tp2_hits * d_tp2_dist, tp3_hits * d_tp3_dist
-    elif suggest_metric == "Risk/Reward":
-        v1, v2, v3 = d_tp1_dist / sl_dist, d_tp2_dist / sl_dist, d_tp3_dist / sl_dist
-    else:  # "Hit Rate"
-        v1, v2, v3 = rate1 * 100, rate2 * 100, rate3 * 100
-
-    best_v = v1
     best_tp = 1
-    best_rate = rate1 * 100
+    best_rate = v1
 
-    if v2 > best_v:
-        best_v = v2
+    if v2 > best_rate:
         best_tp = 2
-        best_rate = rate2 * 100
-    if v3 > best_v:
-        best_v = v3
+        best_rate = v2
+    if v3 > best_rate:
         best_tp = 3
-        best_rate = rate3 * 100
+        best_rate = v3
 
     bubble_text = f"TP{best_tp} {best_rate:.1f}%"
     return bubble_text, best_tp, best_rate
@@ -261,7 +283,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
 # ==========================================
 # CORE ALERT PROCESSOR
 # ==========================================
-def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=900):
+def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
@@ -272,7 +294,6 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
     send_tg = False
-
     if alert_key not in tg_alert_cache:
         send_tg = True
     elif (now - tg_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
@@ -281,16 +302,17 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     if send_tg:
         tg_alert_cache[alert_key] = now
         
-        if "Demand" in alert_type or "Bull" in alert_type or "BUY" in alert_type:
-            header = f"🟢 *[MACRO BUY SIGNAL]* 🟢"
-        elif "Supply" in alert_type or "Bear" in alert_type or "SELL" in alert_type:
-            header = f"🔴 *[MACRO SELL SIGNAL]* 🔴"
+        if "BUY" in alert_type or "Bull" in alert_type:
+            header = f"🟢 *[15M BUY SIGNAL]* 🟢"
+        elif "SELL" in alert_type or "Bear" in alert_type:
+            header = f"🔴 *[15M SELL SIGNAL]* 🔴"
         else:
-            header = f"🟡 *[GANN / ZONE SIGNAL]* 🟡"
+            header = f"🟡 *[15M LEVEL TOUCH SIGNAL]* 🟡"
             
         tg_message = (
             f"{header}\n\n"
             f"• *Asset:* `{display_name}`\n"
+            f"• *Timeframe:* `15 Minutes`\n"
             f"• *Price:* `{price_str}`\n"
             f"• *RSI (5M):* `{rsi_5m_str}`\n"
             f"• *RSI (15M):* `{rsi_15m_str}`\n"
@@ -300,9 +322,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         )
         send_telegram_message(tg_message)
 
-    # Make Webhook Dispatch
     send_sms = False
-
     if alert_key not in sms_alert_cache:
         send_sms = True
     elif (now - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
@@ -310,71 +330,104 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
 
     if send_sms:
         sms_alert_cache[alert_key] = now
-        alert_text = f"ALERT: {display_name} | {alert_type} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'}"
-        sms_payload = {
-            "body": alert_text,
-            "text": alert_text,
-            "message": alert_text
-        }
-        send_make_webhook(sms_payload)
+        alert_text = f"ALERT (15M): {display_name} | {alert_type} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'}"
+        send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE
+# MAIN SCANNER ROUTINE (15M DATA)
 # ==========================================
-def analyze_market(df_5m, symbol):
+def analyze_market(df_15m, symbol):
     try:
-        if df_5m is None or len(df_5m) < 15: return
+        if df_15m is None or len(df_15m) < 30: return
         
-        df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
-        
-        df_temp = df_5m.copy()
-        df_temp.set_index('timestamp', inplace=True)
-        
-        resample_rules = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
-        df_15m = df_temp.resample('15min').agg(resample_rules).dropna()
-        
-        df_1d = fetch_daily_candles(symbol)
+        df_15m['rsi_15m'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
+        live_rsi_15m = float(df_15m['rsi_15m'].iloc[-1])
 
-        live_close = float(df_5m['close'].iloc[-1])
-        live_high = float(df_5m['high'].iloc[-1])
-        live_low = float(df_5m['low'].iloc[-1])
-        live_rsi_5m = float(df_5m['rsi_5m'].iloc[-1])
-        
-        if df_15m is not None and not df_15m.empty:
-            df_15m['rsi'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
-            live_rsi_15m = float(df_15m['rsi'].iloc[-1])
+        # Fetch 5m candles specifically to get live 5m RSI metric
+        df_5m = fetch_candles(symbol, interval="5m", period="2d")
+        if df_5m is not None and not df_5m.empty:
+            df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
+            live_rsi_5m = float(df_5m['rsi_5m'].iloc[-1])
         else:
-            live_rsi_15m = np.nan
+            live_rsi_5m = np.nan
 
-        tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_5m)
-        dynamic_elephant_levels = calculate_adsz_levels(df_1d)
-        
-        if dynamic_elephant_levels:
-            print(f"[{symbol}] ADSZ Levels: {dynamic_elephant_levels}")
-            
-            for key, limits in dynamic_elephant_levels.items():
-                if key == "Daily Midline" or not isinstance(limits, dict): 
-                    continue
+        live_close = float(df_15m['close'].iloc[-1])
+        live_high = float(df_15m['high'].iloc[-1])
+        live_low = float(df_15m['low'].iloc[-1])
+
+        tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_15m)
+
+        # 1. KNN LINE CROSSOVER ALERTS (15M)
+        df_knn = calculate_knn_trend(df_15m)
+        if df_knn is not None and 'knn_ma_smooth' in df_knn.columns and len(df_knn) >= 2:
+            knn_curr = df_knn['knn_ma_smooth'].iloc[-1]
+            knn_prev = df_knn['knn_ma_smooth'].iloc[-2]
+            ma_knn_curr = df_knn['ma_knn'].iloc[-1]
+            ma_knn_prev = df_knn['ma_knn'].iloc[-2]
+
+            if (knn_prev <= ma_knn_prev) and (knn_curr > ma_knn_curr):
+                process_alert(
+                    alert_key=f"{symbol}_KNN_Bullish_Cross_15m",
+                    alert_type="kNN Crossover Average Bullish (15M)",
+                    symbol=symbol,
+                    message="15M kNN Classifier Line crossed ABOVE Average kNN Line.",
+                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
+                )
+            elif (knn_prev >= ma_knn_prev) and (knn_curr < ma_knn_curr):
+                process_alert(
+                    alert_key=f"{symbol}_KNN_Bearish_Cross_15m",
+                    alert_type="kNN Crossunder Average Bearish (15M)",
+                    symbol=symbol,
+                    message="15M kNN Classifier Line crossed BELOW Average kNN Line.",
+                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
+                )
+
+        # 2. LORENTZIAN CLASSIFICATION ML FORMATION ALERTS (15M)
+        df_ml = calculate_lorentzian_classification(df_15m)
+        if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 2:
+            ml_sig_curr = df_ml['ml_signal'].iloc[-1]
+            ml_sig_prev = df_ml['ml_signal'].iloc[-2]
+            ml_pred = df_ml['ml_prediction'].iloc[-1]
+
+            if ml_sig_curr == 1 and ml_sig_prev != 1:
+                process_alert(
+                    alert_key=f"{symbol}_ML_Buy_Signal_15m",
+                    alert_type="Lorentzian ML Buy Signal (15M)",
+                    symbol=symbol,
+                    message=f"15M Machine Learning classification formed positive prediction score: `+{ml_pred}`",
+                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
+                )
+            elif ml_sig_curr == -1 and ml_sig_prev != -1:
+                process_alert(
+                    alert_key=f"{symbol}_ML_Sell_Signal_15m",
+                    alert_type="Lorentzian ML Sell Signal (15M)",
+                    symbol=symbol,
+                    message=f"15M Machine Learning classification formed negative prediction score: `{ml_pred}`",
+                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
+                )
+
+        # 3. HTF LEVEL TOUCH ALERTS
+        htf_levels = calculate_htf_levels(symbol)
+        if htf_levels:
+            buf = 25.0 if symbol == "BTC-USD" else 0.1
+
+            for lvl_name, lvl_val in htf_levels.items():
+                if pd.isna(lvl_val): continue
                 
-                buf = 25.0 if symbol == "BTC-USD" else 1.0
-                z_bottom = limits["bottom"] - buf
-                z_top = limits["top"] + buf
-
-                if (z_bottom <= live_close <= z_top) or (live_high >= z_bottom and live_low <= z_top):
+                if (live_low - buf) <= lvl_val <= (live_high + buf):
                     process_alert(
-                        alert_key=f"{symbol}_{key.replace(' ', '_')}_Touch", 
-                        alert_type=f"Elephant Zone Touch ({key})", 
-                        symbol=symbol, 
-                        message=f"Price tested {key}: `[${limits['bottom']:.2f} - ${limits['top']:.2f}]`", 
-                        price=live_close, 
-                        rsi_5m=live_rsi_5m, 
-                        rsi_15m=live_rsi_15m,
-                        tp_bubble=tp_bubble_text,
-                        cooldown_sec=900
+                        alert_key=f"{symbol}_{lvl_name}_Level_Touch_15m",
+                        alert_type=f"HTF Level Touch ({lvl_name})",
+                        symbol=symbol,
+                        message=f"15M Candle tested HTF Level *{lvl_name}* at `${lvl_val:,.2f}`",
+                        price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                        tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                     )
-        else:
-            print(f"[{symbol}] Daily data unavailable for ADSZ calculation.")
-            
+
     except Exception as e:
         print(f"Error in scanner for {symbol}: {e}")
 
@@ -382,20 +435,20 @@ def analyze_market(df_5m, symbol):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"Market Scanner Fully Online...")
-    send_telegram_message("🚀 *Elephant ADSZ Engine Online* 🚀\n• Actively scanning BTC, ETH, PAXG for Zone Touches and Dynamic TP targets.")
+    print(f"15M Market Scanner Fully Online...")
+    send_telegram_message("🚀 *15M Bitcoin & Gold Scanner Online* 🚀\n• Scanning BTC and PAXG (Gold) on 15M timeframe with a 4-hour alert cooldown.")
     
     while True:
         try:
             for symbol in ACTIVE_SYMBOLS:
-                df = fetch_candles(symbol)
+                df = fetch_candles(symbol, interval="15m", period="7d")
                 if df is not None and not df.empty:
                     analyze_market(df, symbol)
                         
-            time.sleep(15)
+            time.sleep(30)
         except Exception as e:
             print(f"Loop error: {e}")
-            time.sleep(5)
+            time.sleep(10)
 
 if __name__ == "__main__":
     scanner_thread = threading.Thread(target=core_market_scanner_loop, daemon=True)
