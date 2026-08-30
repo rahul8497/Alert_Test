@@ -302,9 +302,11 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
     if send_tg:
         tg_alert_cache[alert_key] = now
         
-        if "BUY" in alert_type or "Bull" in alert_type:
+        # Case insensitive parsing for Telegram header
+        alert_type_upper = alert_type.upper()
+        if "BUY" in alert_type_upper or "BULL" in alert_type_upper:
             header = f"🟢 *[15M BUY SIGNAL]* 🟢"
-        elif "SELL" in alert_type or "Bear" in alert_type:
+        elif "SELL" in alert_type_upper or "BEAR" in alert_type_upper:
             header = f"🔴 *[15M SELL SIGNAL]* 🔴"
         else:
             header = f"🟡 *[15M LEVEL TOUCH SIGNAL]* 🟡"
@@ -334,36 +336,37 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE (15M DATA)
+# MAIN SCANNER ROUTINE (CLOSED 15M CANDLES)
 # ==========================================
 def analyze_market(df_15m, symbol):
     try:
+        # Require enough bars to evaluate completed candle (iloc[-2])
         if df_15m is None or len(df_15m) < 30: return
         
         df_15m['rsi_15m'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
-        live_rsi_15m = float(df_15m['rsi_15m'].iloc[-1])
+        live_rsi_15m = float(df_15m['rsi_15m'].iloc[-2]) # Evaluated on closed candle
 
-        # Fetch 5m candles specifically to get live 5m RSI metric
+        # Fetch 5m candles specifically to get 5m RSI metric
         df_5m = fetch_candles(symbol, interval="5m", period="2d")
         if df_5m is not None and not df_5m.empty:
             df_5m['rsi_5m'] = ta.rsi(df_5m['close'], length=14, mamode='rma')
-            live_rsi_5m = float(df_5m['rsi_5m'].iloc[-1])
+            live_rsi_5m = float(df_5m['rsi_5m'].iloc[-2])
         else:
             live_rsi_5m = np.nan
 
-        live_close = float(df_15m['close'].iloc[-1])
-        live_high = float(df_15m['high'].iloc[-1])
-        live_low = float(df_15m['low'].iloc[-1])
+        confirmed_close = float(df_15m['close'].iloc[-2])
+        confirmed_high = float(df_15m['high'].iloc[-2])
+        confirmed_low = float(df_15m['low'].iloc[-2])
 
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_15m)
 
-        # 1. KNN LINE CROSSOVER ALERTS (15M)
+        # 1. KNN LINE CROSSOVER ALERTS (Completed Candles: -2 vs -3)
         df_knn = calculate_knn_trend(df_15m)
-        if df_knn is not None and 'knn_ma_smooth' in df_knn.columns and len(df_knn) >= 2:
-            knn_curr = df_knn['knn_ma_smooth'].iloc[-1]
-            knn_prev = df_knn['knn_ma_smooth'].iloc[-2]
-            ma_knn_curr = df_knn['ma_knn'].iloc[-1]
-            ma_knn_prev = df_knn['ma_knn'].iloc[-2]
+        if df_knn is not None and 'knn_ma_smooth' in df_knn.columns and len(df_knn) >= 3:
+            knn_curr = df_knn['knn_ma_smooth'].iloc[-2]  # Just closed candle
+            knn_prev = df_knn['knn_ma_smooth'].iloc[-3]  # Prior closed candle
+            ma_knn_curr = df_knn['ma_knn'].iloc[-2]
+            ma_knn_prev = df_knn['ma_knn'].iloc[-3]
 
             if (knn_prev <= ma_knn_prev) and (knn_curr > ma_knn_curr):
                 process_alert(
@@ -371,7 +374,7 @@ def analyze_market(df_15m, symbol):
                     alert_type="kNN Crossover Average Bullish (15M)",
                     symbol=symbol,
                     message="15M kNN Classifier Line crossed ABOVE Average kNN Line.",
-                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
             elif (knn_prev >= ma_knn_prev) and (knn_curr < ma_knn_curr):
@@ -380,16 +383,16 @@ def analyze_market(df_15m, symbol):
                     alert_type="kNN Crossunder Average Bearish (15M)",
                     symbol=symbol,
                     message="15M kNN Classifier Line crossed BELOW Average kNN Line.",
-                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
-        # 2. LORENTZIAN CLASSIFICATION ML FORMATION ALERTS (15M)
+        # 2. LORENTZIAN CLASSIFICATION ML FORMATION ALERTS (Completed Candles: -2 vs -3)
         df_ml = calculate_lorentzian_classification(df_15m)
-        if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 2:
-            ml_sig_curr = df_ml['ml_signal'].iloc[-1]
-            ml_sig_prev = df_ml['ml_signal'].iloc[-2]
-            ml_pred = df_ml['ml_prediction'].iloc[-1]
+        if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
+            ml_sig_curr = df_ml['ml_signal'].iloc[-2]
+            ml_sig_prev = df_ml['ml_signal'].iloc[-3]
+            ml_pred = df_ml['ml_prediction'].iloc[-2]
 
             if ml_sig_curr == 1 and ml_sig_prev != 1:
                 process_alert(
@@ -397,7 +400,7 @@ def analyze_market(df_15m, symbol):
                     alert_type="Lorentzian ML Buy Signal (15M)",
                     symbol=symbol,
                     message=f"15M Machine Learning classification formed positive prediction score: `+{ml_pred}`",
-                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
             elif ml_sig_curr == -1 and ml_sig_prev != -1:
@@ -406,7 +409,7 @@ def analyze_market(df_15m, symbol):
                     alert_type="Lorentzian ML Sell Signal (15M)",
                     symbol=symbol,
                     message=f"15M Machine Learning classification formed negative prediction score: `{ml_pred}`",
-                    price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
@@ -418,13 +421,13 @@ def analyze_market(df_15m, symbol):
             for lvl_name, lvl_val in htf_levels.items():
                 if pd.isna(lvl_val): continue
                 
-                if (live_low - buf) <= lvl_val <= (live_high + buf):
+                if (confirmed_low - buf) <= lvl_val <= (confirmed_high + buf):
                     process_alert(
                         alert_key=f"{symbol}_{lvl_name}_Level_Touch_15m",
                         alert_type=f"HTF Level Touch ({lvl_name})",
                         symbol=symbol,
                         message=f"15M Candle tested HTF Level *{lvl_name}* at `${lvl_val:,.2f}`",
-                        price=live_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                        price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                         tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                     )
 
