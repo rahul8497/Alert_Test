@@ -39,6 +39,7 @@ def run_web_server():
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 
 TELEGRAM_CHAT_IDS = [
+    "-5385748601",  # 📡 Signal Telegram Group
     "1136613703"    # Personal Telegram ID
 ]
 
@@ -281,7 +282,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
     return bubble_text, best_tp, best_rate
 
 # ==========================================
-# CORE ALERT PROCESSOR
+# CORE ALERT PROCESSOR (MODIFIED TO REMOVE SIGNAL TYPE & DETAILS)
 # ==========================================
 def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
@@ -318,9 +319,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
             f"• *Price:* `{price_str}`\n"
             f"• *RSI (5M):* `{rsi_5m_str}`\n"
             f"• *RSI (15M):* `{rsi_15m_str}`\n"
-            f"• *Suggested TP Bubble:* {bubble_str}\n"
-            f"• *Signal Type:* `{alert_type}`\n"
-            f"• *Details:* {message}"
+            f"• *Suggested TP Bubble:* {bubble_str}"
         )
         send_telegram_message(tg_message)
 
@@ -332,7 +331,7 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
 
     if send_sms:
         sms_alert_cache[alert_key] = now
-        alert_text = f"ALERT (15M): {display_name} | {alert_type} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'}"
+        alert_text = f"ALERT (15M): {display_name} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'}"
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
