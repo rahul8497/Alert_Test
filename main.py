@@ -46,12 +46,13 @@ TELEGRAM_CHAT_IDS = [
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
-# 📋 WATCHLIST & CONFIGURATION (BTC, GOLD, 15M, 4H COOLDOWN)
+# 📋 WATCHLIST & CONFIGURATION (BTC, GOLD, NIFTY 50, 4H COOLDOWN)
 # ==========================================
-ACTIVE_SYMBOLS = ["BTC-USD", "PAXG-USD"]
+ACTIVE_SYMBOLS = ["BTC-USD", "PAXG-USD", "^NSEI"]
 DISPLAY_NAMES = {
     "BTC-USD": "BITCOIN (BTC/USD)",
-    "PAXG-USD": "GOLD SPOT (PAXG/USD)"
+    "PAXG-USD": "GOLD SPOT (PAXG/USD)",
+    "^NSEI": "NIFTY 50 INDEX"
 }
 
 ALERT_COOLDOWN_SEC = 14400  # 4 Hours Cooldown (in seconds)
@@ -171,7 +172,108 @@ def calculate_htf_levels(symbol):
         "PWH": pwh, "PWL": pwl, "PMH": pmh, "PML": pml
     }
 
-# SECTION 3: LORENTZIAN CLASSIFICATION ML ENGINE
+# SECTION 3: ADAPTIVE DEMAND & SUPPLY ZONES ENGINE
+def calculate_adaptive_zones(symbol):
+    phi = 1.618034
+    sqrt2 = math.sqrt(2)
+    sqrt252 = math.sqrt(252)
+
+    zones = {}
+
+    # 1. DAILY ZONES
+    df_d = fetch_candles(symbol, interval="1d", period="60d")
+    if df_d is not None and len(df_d) >= 22:
+        df_d['atr'] = ta.atr(df_d['high'], df_d['low'], df_d['close'], length=20)
+        day_open = float(df_d['open'].iloc[-1])
+        day_atr = float(df_d['atr'].iloc[-2])
+        day_close_prev = float(df_d['close'].iloc[-2])
+        day_high_prev = float(df_d['high'].iloc[-2])
+        day_low_prev = float(df_d['low'].iloc[-2])
+
+        atr_ann_pct = (day_atr / day_close_prev) * sqrt252 * 100
+        effvol = 0.69 * atr_ann_pct + 0.0
+        P = round(day_open)
+        sigma = P * effvol / (100.0 * sqrt252)
+        dist_strong = sigma
+        dist_weak = sigma / (2.0 * sqrt2)
+        ws = round(sigma / 4.0)
+        ww = round(sigma / (4.0 * phi))
+
+        zones['Daily'] = {
+            'sd_low': round(P - dist_strong - ws / 2),
+            'sd_high': round(P - dist_strong + ws / 2),
+            'wd_low': round(P - dist_weak - ww / 2),
+            'wd_high': round(P - dist_weak + ww / 2),
+            'ws_low': round(P + dist_weak - ww / 2),
+            'ws_high': round(P + dist_weak + ww / 2),
+            'ss_low': round(P + dist_strong - ws / 2),
+            'ss_high': round(P + dist_strong + ws / 2),
+            'dpoc': round((day_high_prev + day_low_prev + day_close_prev) / 3)
+        }
+
+    # 2. WEEKLY ZONES
+    df_w = fetch_candles(symbol, interval="1wk", period="180d")
+    if df_w is not None and len(df_w) >= 6:
+        df_w['atr'] = ta.atr(df_w['high'], df_w['low'], df_w['close'], length=5)
+        week_open = float(df_w['open'].iloc[-1])
+        w_atr_weekly = float(df_w['atr'].iloc[-2])
+        w_close_prev = float(df_w['close'].iloc[-2])
+
+        w_atr_ann_pct = (w_atr_weekly / w_close_prev) * math.sqrt(52) * 100
+        effvol_w = 0.68 * w_atr_ann_pct + 0.0
+        P_w = round(week_open)
+        sigma_w = P_w * effvol_w / (100.0 * math.sqrt(252.0 / 5.0))
+        dist_strong_w = sigma_w
+        dist_weak_w = sigma_w / (2.0 * sqrt2)
+        ws_w = round(sigma_w / 4.0)
+        ww_w = round(sigma_w / (4.0 * phi))
+
+        zones['Weekly'] = {
+            'wsd_low': round(P_w - dist_strong_w - ws_w / 2),
+            'wsd_high': round(P_w - dist_strong_w + ws_w / 2),
+            'wwd_low': round(P_w - dist_weak_w - ww_w / 2),
+            'wwd_high': round(P_w - dist_weak_w + ww_w / 2),
+            'wws_low': round(P_w + dist_weak_w - ww_w / 2),
+            'wws_high': round(P_w + dist_weak_w + ww_w / 2),
+            'wss_low': round(P_w + dist_strong_w - ws_w / 2),
+            'wss_high': round(P_w + dist_strong_w + ws_w / 2),
+            'wpoc': P_w + 8
+        }
+
+    # 3. MONTHLY ZONES
+    df_m = fetch_candles(symbol, interval="1mo", period="730d")
+    if df_m is not None and len(df_m) >= 21:
+        df_m['atr'] = ta.atr(df_m['high'], df_m['low'], df_m['close'], length=20)
+        month_open = float(df_m['open'].iloc[-1])
+        m_atr_monthly = float(df_m['atr'].iloc[-2])
+        m_close_prev = float(df_m['close'].iloc[-2])
+        m_high_prev = float(df_m['high'].iloc[-2])
+        m_low_prev = float(df_m['low'].iloc[-2])
+
+        m_atr_ann_pct = (m_atr_monthly / month_open) * math.sqrt(12) * 100
+        effvol_m = 0.90 * m_atr_ann_pct + 0.0
+        P_m = round(month_open)
+        sigma_m = P_m * effvol_m / (100.0 * math.sqrt(12.0))
+        dist_strong_m = sigma_m
+        dist_weak_m = sigma_m / 2.77
+        ws_m = round(sigma_m / 4.35)
+        ww_m = round(sigma_m / 5.1)
+
+        zones['Monthly'] = {
+            'msd_low': round(P_m - dist_strong_m - ws_m / 2),
+            'msd_high': round(P_m - dist_strong_m + ws_m / 2),
+            'mwd_low': round(P_m - dist_weak_m - ww_m / 2),
+            'mwd_high': round(P_m - dist_weak_m + ww_m / 2),
+            'mws_low': round(P_m + dist_weak_m - ww_m / 2),
+            'mws_high': round(P_m + dist_weak_m + ww_m / 2),
+            'mss_low': round(P_m + dist_strong_m - ws_m / 2),
+            'mss_high': round(P_m + dist_strong_m + ws_m / 2),
+            'mpoc': round((m_high_prev + m_low_prev + m_close_prev) / 3)
+        }
+
+    return zones
+
+# SECTION 4: LORENTZIAN CLASSIFICATION ML ENGINE
 def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=2000):
     if df is None or len(df) < 50:
         return df
@@ -282,9 +384,9 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
     return bubble_text, best_tp, best_rate
 
 # ==========================================
-# CORE ALERT PROCESSOR (MODIFIED TO REMOVE SIGNAL TYPE & DETAILS)
+# CORE ALERT PROCESSOR
 # ==========================================
-def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
+def process_alert(alert_key, symbol, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
@@ -302,18 +404,8 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
 
     if send_tg:
         tg_alert_cache[alert_key] = now
-        
-        # Case insensitive parsing for Telegram header
-        alert_type_upper = alert_type.upper()
-        if "BUY" in alert_type_upper or "BULL" in alert_type_upper:
-            header = f"🟢 *[15M BUY SIGNAL]* 🟢"
-        elif "SELL" in alert_type_upper or "BEAR" in alert_type_upper:
-            header = f"🔴 *[15M SELL SIGNAL]* 🔴"
-        else:
-            header = f"🟡 *[15M LEVEL TOUCH SIGNAL]* 🟡"
             
         tg_message = (
-            f"{header}\n\n"
             f"• *Asset:* `{display_name}`\n"
             f"• *Timeframe:* `15 Minutes`\n"
             f"• *Price:* `{price_str}`\n"
@@ -339,10 +431,8 @@ def process_alert(alert_key, alert_type, symbol, message, price=None, rsi_5m=Non
 # ==========================================
 def analyze_market(df_15m, symbol):
     try:
-        # Require enough historical data for completed candle checks
         if df_15m is None or len(df_15m) < 50: return
         
-        # Calculate RSIs on confirmed closed candle (iloc[-2])
         df_15m['rsi_15m'] = ta.rsi(df_15m['close'], length=14, mamode='rma')
         live_rsi_15m = float(df_15m['rsi_15m'].iloc[-2])
 
@@ -356,89 +446,107 @@ def analyze_market(df_15m, symbol):
         confirmed_close = float(df_15m['close'].iloc[-2])
         confirmed_high = float(df_15m['high'].iloc[-2])
         confirmed_low = float(df_15m['low'].iloc[-2])
+        prev_low = float(df_15m['low'].iloc[-3])
+        prev_high = float(df_15m['high'].iloc[-3])
 
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_15m)
 
         # ---------------------------------------------------------------------
-        # 1. AI TREND NAVIGATOR (kNN LINE CROSSOVER ALERTS)
+        # 1. AI TREND NAVIGATOR (kNN CROSSOVER ALERTS)
         # ---------------------------------------------------------------------
         df_knn = calculate_knn_trend(df_15m)
         if df_knn is not None and 'knn_ma_smooth' in df_knn.columns and len(df_knn) >= 3:
-            knn_curr = df_knn['knn_ma_smooth'].iloc[-2]  # Just closed candle
-            knn_prev = df_knn['knn_ma_smooth'].iloc[-3]  # Previous closed candle
+            knn_curr = df_knn['knn_ma_smooth'].iloc[-2]
+            knn_prev = df_knn['knn_ma_smooth'].iloc[-3]
             ma_knn_curr = df_knn['ma_knn'].iloc[-2]
             ma_knn_prev = df_knn['ma_knn'].iloc[-3]
 
-            # Bullish Crossover (Green Line Trend Switch)
             if (knn_prev <= ma_knn_prev) and (knn_curr > ma_knn_curr):
                 process_alert(
                     alert_key=f"{symbol}_KNN_Bullish_Cross_15m",
-                    alert_type="AI Trend Navigator Bullish Cross (15M)",
                     symbol=symbol,
-                    message="AI Trend Navigator fast line crossed ABOVE average line (Bullish Trend Switch).",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
-            # Bearish Crossunder (Red Line Trend Switch)
             elif (knn_prev >= ma_knn_prev) and (knn_curr < ma_knn_curr):
                 process_alert(
                     alert_key=f"{symbol}_KNN_Bearish_Cross_15m",
-                    alert_type="AI Trend Navigator Bearish Cross (15M)",
                     symbol=symbol,
-                    message="AI Trend Navigator fast line crossed BELOW average line (Bearish Trend Switch).",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
         # ---------------------------------------------------------------------
-        # 2. LORENTZIAN CLASSIFICATION (SHAPE SIGNAL ALERTS ON CANDLE CLOSE)
+        # 2. LORENTZIAN CLASSIFICATION ALERTS
         # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_15m)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
-            ml_sig_curr = df_ml['ml_signal'].iloc[-2] # Closed candle prediction
-            ml_sig_prev = df_ml['ml_signal'].iloc[-3] # Prior bar prediction
-            ml_pred = df_ml['ml_prediction'].iloc[-2]
+            ml_sig_curr = df_ml['ml_signal'].iloc[-2]
+            ml_sig_prev = df_ml['ml_signal'].iloc[-3]
 
-            # Green Pentagon Shape (Bullish Formation)
             if ml_sig_curr == 1 and ml_sig_prev != 1:
                 process_alert(
                     alert_key=f"{symbol}_Lorentzian_Green_Shape_15m",
-                    alert_type="Lorentzian ML Buy Shape (15M)",
                     symbol=symbol,
-                    message=f"🟢 Green Buy shape confirmed on candle close! Score: `+{ml_pred}`",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
-            # Red Pentagon Shape (Bearish Formation)
             elif ml_sig_curr == -1 and ml_sig_prev != -1:
                 process_alert(
                     alert_key=f"{symbol}_Lorentzian_Red_Shape_15m",
-                    alert_type="Lorentzian ML Sell Shape (15M)",
                     symbol=symbol,
-                    message=f"🔴 Red Sell shape confirmed on candle close! Score: `{ml_pred}`",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
         # ---------------------------------------------------------------------
-        # 3. HTF LEVEL TOUCH ALERTS (PDH, PDL, PP, GANN BASE, PWH, PWL, PMH, PML)
+        # 3. HTF LEVEL TOUCH ALERTS
         # ---------------------------------------------------------------------
         htf_levels = calculate_htf_levels(symbol)
         if htf_levels:
-            buf = 25.0 if symbol == "BTC-USD" else 0.1
-
+            buf = 25.0 if symbol == "BTC-USD" else (10.0 if symbol == "^NSEI" else 0.1)
             for lvl_name, lvl_val in htf_levels.items():
                 if pd.isna(lvl_val): continue
-                
                 if (confirmed_low - buf) <= lvl_val <= (confirmed_high + buf):
                     process_alert(
                         alert_key=f"{symbol}_{lvl_name}_Level_Touch_15m",
-                        alert_type=f"HTF Level Touch ({lvl_name})",
                         symbol=symbol,
-                        message=f"15M Candle tested HTF Level *{lvl_name}* at `${lvl_val:,.2f}`",
                         price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                         tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                     )
+
+        # ---------------------------------------------------------------------
+        # 4. ADAPTIVE DEMAND & SUPPLY ZONE ENTRY ALERTS
+        # ---------------------------------------------------------------------
+        all_zones = calculate_adaptive_zones(symbol)
+
+        # Daily Zone Checks
+        if 'Daily' in all_zones:
+            z = all_zones['Daily']
+            if confirmed_low <= z['sd_high'] and prev_low > z['sd_high']:
+                process_alert(f"{symbol}_Daily_SD_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+            if confirmed_low <= z['wd_high'] and prev_low > z['wd_high']:
+                process_alert(f"{symbol}_Daily_WD_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+            if confirmed_high >= z['ws_low'] and prev_high < z['ws_low']:
+                process_alert(f"{symbol}_Daily_WS_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+            if confirmed_high >= z['ss_low'] and prev_high < z['ss_low']:
+                process_alert(f"{symbol}_Daily_SS_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+
+        # Weekly Zone Checks
+        if 'Weekly' in all_zones:
+            z = all_zones['Weekly']
+            if confirmed_low <= z['wsd_high'] and prev_low > z['wsd_high']:
+                process_alert(f"{symbol}_Weekly_SD_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+            if confirmed_high >= z['wss_low'] and prev_high < z['wss_low']:
+                process_alert(f"{symbol}_Weekly_SS_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+
+        # Monthly Zone Checks
+        if 'Monthly' in all_zones:
+            z = all_zones['Monthly']
+            if confirmed_low <= z['msd_high'] and prev_low > z['msd_high']:
+                process_alert(f"{symbol}_Monthly_SD_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+            if confirmed_high >= z['mss_low'] and prev_high < z['mss_low']:
+                process_alert(f"{symbol}_Monthly_SS_Entry", symbol, confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
 
     except Exception as e:
         print(f"Error in scanner for {symbol}: {e}")
@@ -448,7 +556,7 @@ def analyze_market(df_15m, symbol):
 # ==========================================
 def core_market_scanner_loop():
     print(f"15M Market Scanner Fully Online...")
-    send_telegram_message("🚀 *15M Bitcoin & Gold Scanner Online* 🚀\n• Scanning BTC and PAXG (Gold) on 15M timeframe with a 4-hour alert cooldown.")
+    send_telegram_message("🚀 *15M Market Scanner Online* 🚀\n• Scanning BTC, PAXG (Gold), and NIFTY 50 on 15M timeframe.")
     
     while True:
         try:
