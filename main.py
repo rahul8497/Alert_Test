@@ -163,21 +163,17 @@ def calculate_htf_levels(symbol):
 
     if df_d is None or len(df_d) < 2: return None
 
-    # Previous Day Levels
     pdc = float(df_d['close'].iloc[-2])
     pdh = float(df_d['high'].iloc[-2])
     pdl = float(df_d['low'].iloc[-2])
     pdp = (pdc + pdh + pdl) / 3.0
 
-    # Gann Base Line Level
     gann_base_sqrt = round(math.sqrt(pdc))
     gann_base_level = float(gann_base_sqrt ** 2)
 
-    # Previous Week Levels
     pwh = float(df_w['high'].iloc[-2]) if df_w is not None and len(df_w) >= 2 else np.nan
     pwl = float(df_w['low'].iloc[-2]) if df_w is not None and len(df_w) >= 2 else np.nan
 
-    # Previous Month Levels
     pmh = float(df_m['high'].iloc[-2]) if df_m is not None and len(df_m) >= 2 else np.nan
     pml = float(df_m['low'].iloc[-2]) if df_m is not None and len(df_m) >= 2 else np.nan
 
@@ -404,6 +400,7 @@ def process_alert(alert_key, symbol, category_title, price=None, rsi_5m=None, rs
     global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
+    # Check cooldown per specific event key
     if alert_key in tg_alert_cache and (now - tg_alert_cache[alert_key]).total_seconds() < cooldown_sec:
         return
 
@@ -418,7 +415,6 @@ def process_alert(alert_key, symbol, category_title, price=None, rsi_5m=None, rs
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
     bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
-    # Header icon mapping for the 5 requested categories
     if category_title == "DEMAND":
         header_text = "🟢 *[DEMAND]* 🟢\n\n"
     elif category_title == "SUPPLY":
@@ -483,12 +479,12 @@ def analyze_market(symbol):
                 live_rsi_5m = np.nan
 
         confirmed_close = float(df_main['close'].iloc[-2])
+        prev_close = float(df_main['close'].iloc[-3])
+        
         confirmed_high = float(df_main['high'].iloc[-2])
         confirmed_low = float(df_main['low'].iloc[-2])
         prev_low = float(df_main['low'].iloc[-3])
         prev_high = float(df_main['high'].iloc[-3])
-        
-        candle_ts = str(df_main['timestamp'].iloc[-2])
 
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_main)
 
@@ -504,14 +500,14 @@ def analyze_market(symbol):
 
             if (knn_prev <= ma_knn_prev) and (knn_curr > ma_knn_curr):
                 process_alert(
-                    alert_key=f"{symbol}_KNN_Bullish_Cross_{target_tf}_{candle_ts}",
+                    alert_key=f"{symbol}_KNN_Bullish_Cross",
                     symbol=symbol, category_title="TREND CROSS OVER",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
             elif (knn_prev >= ma_knn_prev) and (knn_curr < ma_knn_curr):
                 process_alert(
-                    alert_key=f"{symbol}_KNN_Bearish_Cross_{target_tf}_{candle_ts}",
+                    alert_key=f"{symbol}_KNN_Bearish_Cross",
                     symbol=symbol, category_title="TREND CROSS OVER",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
@@ -527,30 +523,34 @@ def analyze_market(symbol):
 
             if ml_sig_curr == 1 and ml_sig_prev != 1:
                 process_alert(
-                    alert_key=f"{symbol}_Lorentzian_Green_Shape_{target_tf}_{candle_ts}",
+                    alert_key=f"{symbol}_Lorentzian_Green_Shape",
                     symbol=symbol, category_title="TREND CHANGING",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
             elif ml_sig_curr == -1 and ml_sig_prev != -1:
                 process_alert(
-                    alert_key=f"{symbol}_Lorentzian_Red_Shape_{target_tf}_{candle_ts}",
+                    alert_key=f"{symbol}_Lorentzian_Red_Shape",
                     symbol=symbol, category_title="TREND CHANGING",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
                 )
 
         # ---------------------------------------------------------------------
-        # 3. IMPORTANT LEVEL (PDH, PDL, PP, Gann Base, PWH, PWL, PMH, PML)
+        # 3. IMPORTANT LEVEL (Strict Crossover Evaluation)
         # ---------------------------------------------------------------------
         htf_levels = calculate_htf_levels(symbol)
         if htf_levels:
-            buf = 25.0 if symbol == "BTC-USD" else (10.0 if symbol == "^NSEI" else 0.1)
             for lvl_name, lvl_val in htf_levels.items():
                 if pd.isna(lvl_val): continue
-                if (confirmed_low - buf) <= lvl_val <= (confirmed_high + buf):
+                
+                # Check for strict crossover above or crossunder below
+                crossed_above = (prev_close <= lvl_val) and (confirmed_close > lvl_val)
+                crossed_below = (prev_close >= lvl_val) and (confirmed_close < lvl_val)
+
+                if crossed_above or crossed_below:
                     process_alert(
-                        alert_key=f"{symbol}_{lvl_name}_Level_Touch_{target_tf}_{candle_ts}",
+                        alert_key=f"{symbol}_{lvl_name}_Level_Cross",
                         symbol=symbol, category_title="IMPORTANT LEVEL",
                         price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                         tp_bubble=tp_bubble_text, cooldown_sec=ALERT_COOLDOWN_SEC
@@ -565,29 +565,29 @@ def analyze_market(symbol):
         if 'Daily' in all_zones:
             z = all_zones['Daily']
             if confirmed_low <= z['sd_high'] and prev_low > z['sd_high']:
-                process_alert(f"{symbol}_Daily_SD_Entry_{candle_ts}", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Daily_SD_Entry", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
             if confirmed_low <= z['wd_high'] and prev_low > z['wd_high']:
-                process_alert(f"{symbol}_Daily_WD_Entry_{candle_ts}", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Daily_WD_Entry", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
             if confirmed_high >= z['ws_low'] and prev_high < z['ws_low']:
-                process_alert(f"{symbol}_Daily_WS_Entry_{candle_ts}", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Daily_WS_Entry", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
             if confirmed_high >= z['ss_low'] and prev_high < z['ss_low']:
-                process_alert(f"{symbol}_Daily_SS_Entry_{candle_ts}", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Daily_SS_Entry", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
 
         # Weekly Zone Checks
         if 'Weekly' in all_zones:
             z = all_zones['Weekly']
             if confirmed_low <= z['wsd_high'] and prev_low > z['wsd_high']:
-                process_alert(f"{symbol}_Weekly_SD_Entry_{candle_ts}", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Weekly_SD_Entry", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
             if confirmed_high >= z['wss_low'] and prev_high < z['wss_low']:
-                process_alert(f"{symbol}_Weekly_SS_Entry_{candle_ts}", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Weekly_SS_Entry", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
 
         # Monthly Zone Checks
         if 'Monthly' in all_zones:
             z = all_zones['Monthly']
             if confirmed_low <= z['msd_high'] and prev_low > z['msd_high']:
-                process_alert(f"{symbol}_Monthly_SD_Entry_{candle_ts}", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Monthly_SD_Entry", symbol, "DEMAND", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
             if confirmed_high >= z['mss_low'] and prev_high < z['mss_low']:
-                process_alert(f"{symbol}_Monthly_SS_Entry_{candle_ts}", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
+                process_alert(f"{symbol}_Monthly_SS_Entry", symbol, "SUPPLY", confirmed_close, live_rsi_5m, live_rsi_15m, tp_bubble_text, ALERT_COOLDOWN_SEC)
 
     except Exception as e:
         print(f"Error in scanner for {symbol}: {e}")
