@@ -6,4 +6,4 @@ numpy>=1.24.0
 Flask>=3.0.0
 websocket-client>=1.6.0
 pytz
-git+https://github.com/RohanSys/tvdatafeed.git
+https://github.com/RohanSys/tvdatafeed/archive/refs/heads/main.zip
