@@ -489,6 +489,7 @@ def analyze_market(symbol_key):
         cfg = SYMBOL_CONFIG[symbol_key]
         target_tf = cfg["interval_tv"]
 
+        # Fetch main candles based on strict symbol config (15M for BTC/PAXG, 5M for NIFTY)
         df_main = fetch_candles(symbol_key, interval=target_tf, n_bars=1000)
         if df_main is None or len(df_main) < 50: return
         
@@ -512,6 +513,7 @@ def analyze_market(symbol_key):
             else:
                 live_rsi_5m = np.nan
 
+        # Use iloc[-2] for strict confirmed closed candle valuation
         confirmed_close = float(df_main['close'].iloc[-2])
         prev_close = float(df_main['close'].iloc[-3])
         
@@ -548,7 +550,7 @@ def analyze_market(symbol_key):
                 )
 
         # ---------------------------------------------------------------------
-        # 2. TREND CHANGING (Lorentzian Machine Learning Signal)
+        # 2. TREND CHANGING (Lorentzian ML Signal - STRICT CONFIRMED TIMEFRAME)
         # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_main)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
