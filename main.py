@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Status: ONLINE | Hybrid Dual-Engine (Instant Intrabar Zones + Confirmed ML) Active", 200
+    return "Bot Status: ONLINE | 4-Hour Universal Cooldown Engine Active", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -65,8 +65,8 @@ SYMBOL_CONFIG = {
     }
 }
 
-# --- COOLDOWN TIMERS ---
-ZONE_COOLDOWN_SEC = 900     # 15 Minutes Cooldown for Instant Intrabar Zone/Level Touches
+# --- UNIVERSAL 4-HOUR COOLDOWN TIMERS ---
+ZONE_COOLDOWN_SEC = 14400   # 4 Hours Cooldown for Instant Zone/Level Touches
 ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed Candle-Close ML Arrows
 
 tg_alert_cache = {}
@@ -323,7 +323,7 @@ def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_v
 # ==========================================
 # CORE ALERT PROCESSOR
 # ==========================================
-def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=900):
+def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
@@ -369,7 +369,7 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE (HYBRID DUAL-ENGINE)
+# MAIN SCANNER ROUTINE (4-HOUR COOLDOWN)
 # ==========================================
 def analyze_market(symbol_key):
     try:
@@ -470,8 +470,8 @@ def analyze_market(symbol_key):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BTC & GOLD Hybrid TradingView Scanner Fully Online...")
-    send_telegram_message("🚀 *BTC & GOLD Instant Hybrid Scanner Online* 🚀\n• Instant Intrabar Zone/Level Touches (15M Cooldown)\n• Confirmed 15M ML Trend Arrows (4H Cooldown)")
+    print(f"BTC & GOLD 4-Hour Cooldown Scanner Online...")
+    send_telegram_message("🚀 *BTC & GOLD 4-Hour Cooldown Scanner Online* 🚀\n• Instant Intrabar Zone/Level Touches\n• Confirmed 15M ML Trend Arrows\n• Enforced 4-Hour Universal Cooldown across all alert types")
     
     while True:
         try:
