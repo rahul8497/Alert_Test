@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE | Strict 15M Confirmed Engine Active", 200
+    return "Bot Status: ONLINE | Hybrid Dual-Engine (Instant Intrabar Zones + Confirmed ML) Active", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -65,8 +65,9 @@ SYMBOL_CONFIG = {
     }
 }
 
-# --- GLOBAL 4-HOUR COOLDOWN TIMER ---
-STRICT_COOLDOWN_SEC = 14400  # 4 Hours Cooldown (in seconds)
+# --- COOLDOWN TIMERS ---
+ZONE_COOLDOWN_SEC = 900     # 15 Minutes Cooldown for Instant Intrabar Zone/Level Touches
+ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed Candle-Close ML Arrows
 
 tg_alert_cache = {}
 sms_alert_cache = {}
@@ -320,9 +321,9 @@ def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_v
     return bubble_text, best_tp, best_rate
 
 # ==========================================
-# CORE ALERT PROCESSOR (4-HOUR COOLDOWN)
+# CORE ALERT PROCESSOR
 # ==========================================
-def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
+def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=900):
     global tg_alert_cache, sms_alert_cache
     now = datetime.now(timezone.utc)
     
@@ -368,7 +369,7 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE (CONFIRMED 15M ONLY)
+# MAIN SCANNER ROUTINE (HYBRID DUAL-ENGINE)
 # ==========================================
 def analyze_market(symbol_key):
     try:
@@ -378,29 +379,70 @@ def analyze_market(symbol_key):
         df_main = fetch_candles(symbol_key, interval=target_tf, n_bars=1000)
         if df_main is None or len(df_main) < 50: return
         
-        # Calculate 15M RSIs on confirmed close
+        # Live and Confirmed RSIs
         df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
-        confirmed_rsi_15m = float(df_main['rsi_15m_calc'].iloc[-2])
+        live_rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
 
         df_5m_temp = fetch_candles(symbol_key, interval=Interval.in_5_minute, n_bars=100)
         if df_5m_temp is not None and not df_5m_temp.empty:
             df_5m_temp['rsi_5m_calc'] = ta.rsi(df_5m_temp['close'], length=14, mamode='rma')
-            confirmed_rsi_5m = float(df_5m_temp['rsi_5m_calc'].iloc[-2])
+            live_rsi_5m = float(df_5m_temp['rsi_5m_calc'].iloc[-1])
         else:
-            confirmed_rsi_5m = np.nan
+            live_rsi_5m = np.nan
 
-        # STRICT CONFIRMED 15-MINUTE CANDLE PRICES (iloc[-2])
+        # REAL-TIME LIVE PRICES (iloc[-1]) -> INSTANT ZONE/LEVEL TOUCHES
+        live_price = float(df_main['close'].iloc[-1])
+        live_high = float(df_main['high'].iloc[-1])
+        live_low = float(df_main['low'].iloc[-1])
+
+        # CONFIRMED CANDLE CLOSE PRICES (iloc[-2]) -> NO-REPAINT ML ARROWS
         confirmed_close = float(df_main['close'].iloc[-2])
-        prev_close = float(df_main['close'].iloc[-3])
-        confirmed_high = float(df_main['high'].iloc[-2])
-        confirmed_low = float(df_main['low'].iloc[-2])
-        prev_low = float(df_main['low'].iloc[-3])
-        prev_high = float(df_main['high'].iloc[-3])
 
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_main)
 
         # ---------------------------------------------------------------------
-        # 1. TREND CHANGING (Lorentzian ML Arrow Signal - STRICT 15M CLOSE)
+        # ENGINE A: INSTANT DEMAND & SUPPLY ZONE TOUCHES (LIVE INTRABAR iloc[-1])
+        # ---------------------------------------------------------------------
+        all_zones = calculate_adaptive_zones(symbol_key)
+
+        if 'Daily' in all_zones:
+            z = all_zones['Daily']
+            # Instant Demand Touch: Fires immediately when live low enters zone
+            if live_low <= z['sd_high'] and live_price >= z['sd_low']:
+                process_alert(
+                    alert_key=f"{symbol_key}_INSTANT_DEMAND_{z['sd_high']}",
+                    symbol_key=symbol_key, category_title="DEMAND",
+                    price=live_price, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC
+                )
+            # Instant Supply Touch: Fires immediately when live high enters zone
+            elif live_high >= z['ws_low'] and live_price <= z['ws_high']:
+                process_alert(
+                    alert_key=f"{symbol_key}_INSTANT_SUPPLY_{z['ws_low']}",
+                    symbol_key=symbol_key, category_title="SUPPLY",
+                    price=live_price, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC
+                )
+
+        # ---------------------------------------------------------------------
+        # ENGINE B: INSTANT IMPORTANT LEVEL TOUCHES (LIVE INTRABAR iloc[-1])
+        # ---------------------------------------------------------------------
+        htf_levels = calculate_htf_levels(symbol_key)
+        if htf_levels:
+            for lvl_name, lvl_val in htf_levels.items():
+                if pd.isna(lvl_val): continue
+                
+                # Check if current live price touches level within 0.08% tolerance
+                if abs(live_price - lvl_val) / lvl_val <= 0.0008:
+                    process_alert(
+                        alert_key=f"{symbol_key}_INSTANT_LEVEL_{lvl_name}_{round(lvl_val)}",
+                        symbol_key=symbol_key, category_title="IMPORTANT LEVEL",
+                        price=live_price, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                        tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC
+                    )
+
+        # ---------------------------------------------------------------------
+        # ENGINE C: TREND CHANGING (CONFIRMED 15M CANDLE-CLOSE ML ARROWS iloc[-2])
         # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_main)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
@@ -410,49 +452,16 @@ def analyze_market(symbol_key):
                 process_alert(
                     alert_key=f"{symbol_key}_TREND_CHANGING_BULLISH",
                     symbol_key=symbol_key, category_title="TREND CHANGING",
-                    price=confirmed_close, rsi_5m=confirmed_rsi_5m, rsi_15m=confirmed_rsi_15m,
-                    tp_bubble=tp_bubble_text, cooldown_sec=STRICT_COOLDOWN_SEC
+                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ARROW_COOLDOWN_SEC
                 )
             elif ml_sig_curr == -1:
                 process_alert(
                     alert_key=f"{symbol_key}_TREND_CHANGING_BEARISH",
                     symbol_key=symbol_key, category_title="TREND CHANGING",
-                    price=confirmed_close, rsi_5m=confirmed_rsi_5m, rsi_15m=confirmed_rsi_15m,
-                    tp_bubble=tp_bubble_text, cooldown_sec=STRICT_COOLDOWN_SEC
+                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=ARROW_COOLDOWN_SEC
                 )
-
-        # ---------------------------------------------------------------------
-        # 2. DEMAND & SUPPLY ZONES (CONFIRMED 15M CANDLE CLOSE - 4H COOLDOWN)
-        # ---------------------------------------------------------------------
-        all_zones = calculate_adaptive_zones(symbol_key)
-
-        if 'Daily' in all_zones:
-            z = all_zones['Daily']
-            # Demand Touch: Low entered zone
-            if confirmed_low <= z['sd_high'] and prev_low > z['sd_high']:
-                process_alert(f"{symbol_key}_DEMAND_ZONE", symbol_key, "DEMAND", confirmed_close, confirmed_rsi_5m, confirmed_rsi_15m, tp_bubble_text, STRICT_COOLDOWN_SEC)
-            # Supply Touch: High entered zone
-            elif confirmed_high >= z['ws_low'] and prev_high < z['ws_low']:
-                process_alert(f"{symbol_key}_SUPPLY_ZONE", symbol_key, "SUPPLY", confirmed_close, confirmed_rsi_5m, confirmed_rsi_15m, tp_bubble_text, STRICT_COOLDOWN_SEC)
-
-        # ---------------------------------------------------------------------
-        # 3. IMPORTANT LEVELS (CONFIRMED 15M CANDLE CROSS - 4H COOLDOWN)
-        # ---------------------------------------------------------------------
-        htf_levels = calculate_htf_levels(symbol_key)
-        if htf_levels:
-            for lvl_name, lvl_val in htf_levels.items():
-                if pd.isna(lvl_val): continue
-                
-                crossed_above = (prev_close <= lvl_val) and (confirmed_close > lvl_val)
-                crossed_below = (prev_close >= lvl_val) and (confirmed_close < lvl_val)
-
-                if crossed_above or crossed_below:
-                    process_alert(
-                        alert_key=f"{symbol_key}_IMPORTANT_LEVEL",
-                        symbol_key=symbol_key, category_title="IMPORTANT LEVEL",
-                        price=confirmed_close, rsi_5m=confirmed_rsi_5m, rsi_15m=confirmed_rsi_15m,
-                        tp_bubble=tp_bubble_text, cooldown_sec=STRICT_COOLDOWN_SEC
-                    )
 
     except Exception as e:
         print(f"Error in scanner for {symbol_key}: {e}")
@@ -461,8 +470,8 @@ def analyze_market(symbol_key):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BTC & GOLD Strict 15M Scanner Online...")
-    send_telegram_message("🚀 *Strict BTC & GOLD 15M Scanner Online* 🚀\n• All alerts locked to 15M Candle Closes.\n• Enforced 4-Hour Global Cooldown per asset.")
+    print(f"BTC & GOLD Hybrid TradingView Scanner Fully Online...")
+    send_telegram_message("🚀 *BTC & GOLD Instant Hybrid Scanner Online* 🚀\n• Instant Intrabar Zone/Level Touches (15M Cooldown)\n• Confirmed 15M ML Trend Arrows (4H Cooldown)")
     
     while True:
         try:
