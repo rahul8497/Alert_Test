@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Status: ONLINE | Strict UI Parity Engine Active", 200
+    return "Bot Status: ONLINE | Complete Engine (PDH, PDL, PP, Gann + Strict ML) Active", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -65,9 +65,9 @@ SYMBOL_CONFIG = {
     }
 }
 
-# --- COOLDOWN TIMERS ---
-ZONE_COOLDOWN_SEC = 14400   # 4 Hours Cooldown for Instant Intrabar Level Touches
-ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed ML Arrows
+# --- UNIVERSAL COOLDOWN TIMERS ---
+ZONE_COOLDOWN_SEC = 14400   # 4 Hours Cooldown for Instant Intrabar Zone/Level Touches
+ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed Candle-Close ML Arrows
 
 tg_alert_cache = {}
 sms_alert_cache = {}
@@ -125,31 +125,27 @@ def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=1000):
 # 📈 PINE SCRIPT MATH ENGINE CONVERSIONS
 # ==========================================
 
-# SECTION 1: HTF LEVELS, PIVOT POINTS & GANN BASE LINE
+# SECTION 1: HTF LEVELS (PDH, PDL, PP, GANN BASE)
 def calculate_htf_levels(symbol_key):
     df_d = fetch_candles(symbol_key, interval=Interval.in_daily, n_bars=30)
-    df_w = fetch_candles(symbol_key, interval=Interval.in_weekly, n_bars=10)
-    df_m = fetch_candles(symbol_key, interval=Interval.in_monthly, n_bars=12)
-
     if df_d is None or len(df_d) < 2: return None
 
     pdc = float(df_d['close'].iloc[-2])
     pdh = float(df_d['high'].iloc[-2])
     pdl = float(df_d['low'].iloc[-2])
+    
+    # Standard Daily Pivot Point
     pdp = (pdc + pdh + pdl) / 3.0
 
+    # Exact Gann Base Line (Nearest Square Root Level)
     gann_base_sqrt = round(math.sqrt(pdc))
     gann_base_level = float(gann_base_sqrt ** 2)
 
-    pwh = float(df_w['high'].iloc[-2]) if df_w is not None and len(df_w) >= 2 else np.nan
-    pwl = float(df_w['low'].iloc[-2]) if df_w is not None and len(df_w) >= 2 else np.nan
-
-    pmh = float(df_m['high'].iloc[-2]) if df_m is not None and len(df_m) >= 2 else np.nan
-    pml = float(df_m['low'].iloc[-2]) if df_m is not None and len(df_m) >= 2 else np.nan
-
     return {
-        "PDH": pdh, "PDL": pdl, "PP": pdp, "Gann Base": gann_base_level,
-        "PWH": pwh, "PWL": pwl, "PMH": pmh, "PML": pml
+        "PDH": pdh,
+        "PDL": pdl,
+        "PP": pdp,
+        "Gann Base": gann_base_level
     }
 
 # SECTION 2: ADAPTIVE DEMAND & SUPPLY ZONES ENGINE
@@ -197,7 +193,6 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
     df_calc = df.copy()
     df_calc['hlc3'] = (df_calc['high'] + df_calc['low'] + df_calc['close']) / 3.0
     
-    # Feature inputs matching Pine Script
     f1 = ta.rsi(df_calc['close'], length=14)
     f2 = ta.rsi(df_calc['hlc3'], length=10)
     f3 = ta.cci(df_calc['high'], df_calc['low'], df_calc['close'], length=20)
@@ -235,23 +230,23 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
     # --- STRICT UI ARROW DETECTION LOGIC ---
     ml_signal = np.zeros(len(df_calc))
     last_signal_bar = -10
-    current_state = 0  # 1 for Bullish Arrow Active, -1 for Bearish Arrow Active
+    current_state = 0
 
     for i in range(4, len(df_calc)):
         score = predictions[i]
         price_close = close_vals[i]
         ema_val = ema_vals[i]
 
-        # GREEN UP ARROW CONDITIONS: Full Strength (>= 8) AND Price > EMA AND not already bullish
+        # GREEN UP ARROW CONDITIONS (Score >= 8 AND Price > EMA AND 4-bar hold)
         if score >= 8 and price_close > ema_val and current_state != 1:
-            if (i - last_signal_bar) >= 4:  # Enforce Pine Script 4-bar minimum signal gap
+            if (i - last_signal_bar) >= 4:
                 ml_signal[i] = 1
                 current_state = 1
                 last_signal_bar = i
 
-        # RED DOWN ARROW CONDITIONS: Full Strength (<= -8) AND Price < EMA AND not already bearish
+        # RED DOWN ARROW CONDITIONS (Score <= -8 AND Price < EMA AND 4-bar hold)
         elif score <= -8 and price_close < ema_val and current_state != -1:
-            if (i - last_signal_bar) >= 4:  # Enforce Pine Script 4-bar minimum signal gap
+            if (i - last_signal_bar) >= 4:
                 ml_signal[i] = -1
                 current_state = -1
                 last_signal_bar = i
@@ -432,14 +427,15 @@ def analyze_market(symbol_key):
                 )
 
         # ---------------------------------------------------------------------
-        # ENGINE B: INSTANT IMPORTANT LEVEL TOUCHES (LIVE INTRABAR iloc[-1])
+        # ENGINE B: INSTANT IMPORTANT LEVEL TOUCHES (PDH, PDL, PP, GANN BASE)
         # ---------------------------------------------------------------------
         htf_levels = calculate_htf_levels(symbol_key)
         if htf_levels:
             for lvl_name, lvl_val in htf_levels.items():
                 if pd.isna(lvl_val): continue
                 
-                if abs(live_price - lvl_val) / lvl_val <= 0.0008:
+                # Tight 0.03% tolerance for instant level touch
+                if abs(live_price - lvl_val) / lvl_val <= 0.0003:
                     process_alert(
                         alert_key=f"{symbol_key}_INSTANT_LEVEL_{lvl_name}_{round(lvl_val)}",
                         symbol_key=symbol_key, category_title="IMPORTANT LEVEL",
@@ -448,11 +444,10 @@ def analyze_market(symbol_key):
                     )
 
         # ---------------------------------------------------------------------
-        # ENGINE C: TREND CHANGING (EXACT TRADINGVIEW VISUAL BOX ARROW MATCH)
+        # ENGINE C: TREND CHANGING (CONFIRMED 15M CANDLE CLOSE ML ARROWS iloc[-2])
         # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_main)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
-            # Check the confirmed closed bar (iloc[-2])
             ml_sig_curr = df_ml['ml_signal'].iloc[-2]
 
             if ml_sig_curr == 1:
@@ -477,8 +472,8 @@ def analyze_market(symbol_key):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BTC & GOLD Strict UI Parity Scanner Online...")
-    send_telegram_message("🚀 *BTC & GOLD Strict UI Parity Scanner Online* 🚀\n• Instant Intrabar Level & Zone Touches\n• Strict Visual Arrow Parity (Requires Score Threshold >= 8 / <= -8 and 4-Bar Filter)")
+    print(f"BTC & GOLD Full Engine Scanner Online...")
+    send_telegram_message("🚀 *BTC & GOLD Full Engine Scanner Online* 🚀\n• Tracking PDH, PDL, PP & Gann Base Lines (0.03% Tolerance)\n• Instant Intrabar Zone Touches\n• Confirmed 15M ML Trend Arrows")
     
     while True:
         try:
