@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Status: ONLINE | 4-Hour Universal Cooldown Engine Active", 200
+    return "Bot Status: ONLINE | Strict UI Parity Engine Active", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -65,9 +65,9 @@ SYMBOL_CONFIG = {
     }
 }
 
-# --- UNIVERSAL 4-HOUR COOLDOWN TIMERS ---
-ZONE_COOLDOWN_SEC = 14400   # 4 Hours Cooldown for Instant Zone/Level Touches
-ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed Candle-Close ML Arrows
+# --- COOLDOWN TIMERS ---
+ZONE_COOLDOWN_SEC = 14400   # 4 Hours Cooldown for Instant Intrabar Level Touches
+ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed ML Arrows
 
 tg_alert_cache = {}
 sms_alert_cache = {}
@@ -189,7 +189,7 @@ def calculate_adaptive_zones(symbol_key):
 
     return zones
 
-# SECTION 3: LORENTZIAN CLASSIFICATION ML ENGINE (EXACT UI ARROWS FILTER)
+# SECTION 3: STRICT TRADINGVIEW LORENTZIAN ARROW ENGINE
 def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=1000, ema_len=20):
     if df is None or len(df) < max(50, ema_len):
         return df
@@ -197,6 +197,7 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
     df_calc = df.copy()
     df_calc['hlc3'] = (df_calc['high'] + df_calc['low'] + df_calc['close']) / 3.0
     
+    # Feature inputs matching Pine Script
     f1 = ta.rsi(df_calc['close'], length=14)
     f2 = ta.rsi(df_calc['hlc3'], length=10)
     f3 = ta.cci(df_calc['high'], df_calc['low'], df_calc['close'], length=20)
@@ -231,21 +232,29 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
             pred_val = np.sum(y_train[start_idx + nearest_indices])
             predictions[idx] = pred_val
 
+    # --- STRICT UI ARROW DETECTION LOGIC ---
     ml_signal = np.zeros(len(df_calc))
-    
-    for i in range(1, len(df_calc)):
-        is_bullish = (predictions[i] > 0) and (close_vals[i] > ema_vals[i])
-        was_bullish = (predictions[i-1] > 0) and (close_vals[i-1] > ema_vals[i-1])
-        
-        is_bearish = (predictions[i] < 0) and (close_vals[i] < ema_vals[i])
-        was_bearish = (predictions[i-1] < 0) and (close_vals[i-1] < ema_vals[i-1])
+    last_signal_bar = -10
+    current_state = 0  # 1 for Bullish Arrow Active, -1 for Bearish Arrow Active
 
-        if is_bullish and not was_bullish:
-            ml_signal[i] = 1
-        elif is_bearish and not was_bearish:
-            ml_signal[i] = -1
-        else:
-            ml_signal[i] = 0
+    for i in range(4, len(df_calc)):
+        score = predictions[i]
+        price_close = close_vals[i]
+        ema_val = ema_vals[i]
+
+        # GREEN UP ARROW CONDITIONS: Full Strength (>= 8) AND Price > EMA AND not already bullish
+        if score >= 8 and price_close > ema_val and current_state != 1:
+            if (i - last_signal_bar) >= 4:  # Enforce Pine Script 4-bar minimum signal gap
+                ml_signal[i] = 1
+                current_state = 1
+                last_signal_bar = i
+
+        # RED DOWN ARROW CONDITIONS: Full Strength (<= -8) AND Price < EMA AND not already bearish
+        elif score <= -8 and price_close < ema_val and current_state != -1:
+            if (i - last_signal_bar) >= 4:  # Enforce Pine Script 4-bar minimum signal gap
+                ml_signal[i] = -1
+                current_state = -1
+                last_signal_bar = i
 
     df_calc['ml_prediction'] = predictions
     df_calc['ml_signal'] = ml_signal
@@ -369,7 +378,7 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE (4-HOUR COOLDOWN)
+# MAIN SCANNER ROUTINE
 # ==========================================
 def analyze_market(symbol_key):
     try:
@@ -407,7 +416,6 @@ def analyze_market(symbol_key):
 
         if 'Daily' in all_zones:
             z = all_zones['Daily']
-            # Instant Demand Touch: Fires immediately when live low enters zone
             if live_low <= z['sd_high'] and live_price >= z['sd_low']:
                 process_alert(
                     alert_key=f"{symbol_key}_INSTANT_DEMAND_{z['sd_high']}",
@@ -415,7 +423,6 @@ def analyze_market(symbol_key):
                     price=live_price, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC
                 )
-            # Instant Supply Touch: Fires immediately when live high enters zone
             elif live_high >= z['ws_low'] and live_price <= z['ws_high']:
                 process_alert(
                     alert_key=f"{symbol_key}_INSTANT_SUPPLY_{z['ws_low']}",
@@ -432,7 +439,6 @@ def analyze_market(symbol_key):
             for lvl_name, lvl_val in htf_levels.items():
                 if pd.isna(lvl_val): continue
                 
-                # Check if current live price touches level within 0.08% tolerance
                 if abs(live_price - lvl_val) / lvl_val <= 0.0008:
                     process_alert(
                         alert_key=f"{symbol_key}_INSTANT_LEVEL_{lvl_name}_{round(lvl_val)}",
@@ -442,22 +448,23 @@ def analyze_market(symbol_key):
                     )
 
         # ---------------------------------------------------------------------
-        # ENGINE C: TREND CHANGING (CONFIRMED 15M CANDLE-CLOSE ML ARROWS iloc[-2])
+        # ENGINE C: TREND CHANGING (EXACT TRADINGVIEW VISUAL BOX ARROW MATCH)
         # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_main)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
+            # Check the confirmed closed bar (iloc[-2])
             ml_sig_curr = df_ml['ml_signal'].iloc[-2]
 
             if ml_sig_curr == 1:
                 process_alert(
-                    alert_key=f"{symbol_key}_TREND_CHANGING_BULLISH",
+                    alert_key=f"{symbol_key}_GREEN_ARROW_CONFIRMED",
                     symbol_key=symbol_key, category_title="TREND CHANGING",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ARROW_COOLDOWN_SEC
                 )
             elif ml_sig_curr == -1:
                 process_alert(
-                    alert_key=f"{symbol_key}_TREND_CHANGING_BEARISH",
+                    alert_key=f"{symbol_key}_RED_ARROW_CONFIRMED",
                     symbol_key=symbol_key, category_title="TREND CHANGING",
                     price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
                     tp_bubble=tp_bubble_text, cooldown_sec=ARROW_COOLDOWN_SEC
@@ -470,8 +477,8 @@ def analyze_market(symbol_key):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BTC & GOLD 4-Hour Cooldown Scanner Online...")
-    send_telegram_message("🚀 *BTC & GOLD 4-Hour Cooldown Scanner Online* 🚀\n• Instant Intrabar Zone/Level Touches\n• Confirmed 15M ML Trend Arrows\n• Enforced 4-Hour Universal Cooldown across all alert types")
+    print(f"BTC & GOLD Strict UI Parity Scanner Online...")
+    send_telegram_message("🚀 *BTC & GOLD Strict UI Parity Scanner Online* 🚀\n• Instant Intrabar Level & Zone Touches\n• Strict Visual Arrow Parity (Requires Score Threshold >= 8 / <= -8 and 4-Bar Filter)")
     
     while True:
         try:
