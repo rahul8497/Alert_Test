@@ -28,7 +28,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Bot Matrix Status: ONLINE | Real-Time Intrabar Zones & 15M ML Engine Active", 200
+    return "Bot Matrix Status: ONLINE | Strict 15M Confirmed Engine Active", 200
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -65,9 +65,8 @@ SYMBOL_CONFIG = {
     }
 }
 
-# --- COOLDOWN TIMERS ---
-ZONE_COOLDOWN_SEC = 900     # 15 Minutes Cooldown for Intrabar Level & Zone Touches
-ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed ML Trend Arrows
+# --- GLOBAL 4-HOUR COOLDOWN TIMER ---
+STRICT_COOLDOWN_SEC = 14400  # 4 Hours Cooldown (in seconds)
 
 tg_alert_cache = {}
 sms_alert_cache = {}
@@ -125,51 +124,7 @@ def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=1000):
 # 📈 PINE SCRIPT MATH ENGINE CONVERSIONS
 # ==========================================
 
-# SECTION 1: AI TREND NAVIGATOR (kNN Moving Average)
-def calculate_knn_trend(df, ma_len=5, ma_len_target=5, num_closest=3, smoothing_period=50):
-    if df is None or len(df) < max(ma_len, ma_len_target, smoothing_period) + 30:
-        return df
-
-    df_calc = df.copy()
-    df_calc['hl2'] = (df_calc['high'] + df_calc['low']) / 2.0
-    value_in = ta.sma(df_calc['hl2'], length=ma_len)
-    target_in = ta.rma(df_calc['close'], length=ma_len_target)
-
-    window_size = max(num_closest, 30)
-    knn_ma = []
-
-    for idx in range(len(df_calc)):
-        if idx < window_size:
-            knn_ma.append(np.nan)
-            continue
-        
-        target_val = target_in.iloc[idx]
-        if pd.isna(target_val):
-            knn_ma.append(np.nan)
-            continue
-
-        distances = []
-        for i in range(1, window_size + 1):
-            v = value_in.iloc[idx - i]
-            if not pd.isna(v):
-                dist = abs(target_val - v)
-                distances.append((dist, v))
-
-        if len(distances) < num_closest:
-            knn_ma.append(np.nan)
-            continue
-
-        distances.sort(key=lambda x: x[0])
-        closest_vals = [x[1] for x in distances[:num_closest]]
-        knn_ma.append(np.mean(closest_vals))
-
-    df_calc['knn_ma'] = knn_ma
-    df_calc['knn_ma_smooth'] = ta.wma(df_calc['knn_ma'], length=5)
-    df_calc['ma_knn'] = ta.rma(df_calc['knn_ma'], length=smoothing_period)
-
-    return df_calc
-
-# SECTION 2: HTF LEVELS, PIVOT POINTS & GANN BASE LINE
+# SECTION 1: HTF LEVELS, PIVOT POINTS & GANN BASE LINE
 def calculate_htf_levels(symbol_key):
     df_d = fetch_candles(symbol_key, interval=Interval.in_daily, n_bars=30)
     df_w = fetch_candles(symbol_key, interval=Interval.in_weekly, n_bars=10)
@@ -196,7 +151,7 @@ def calculate_htf_levels(symbol_key):
         "PWH": pwh, "PWL": pwl, "PMH": pmh, "PML": pml
     }
 
-# SECTION 3: ADAPTIVE DEMAND & SUPPLY ZONES ENGINE
+# SECTION 2: ADAPTIVE DEMAND & SUPPLY ZONES ENGINE
 def calculate_adaptive_zones(symbol_key):
     phi = 1.618034
     sqrt2 = math.sqrt(2)
@@ -204,15 +159,12 @@ def calculate_adaptive_zones(symbol_key):
 
     zones = {}
 
-    # 1. DAILY ZONES
     df_d = fetch_candles(symbol_key, interval=Interval.in_daily, n_bars=60)
     if df_d is not None and len(df_d) >= 22:
         df_d['atr'] = ta.atr(df_d['high'], df_d['low'], df_d['close'], length=20)
         day_open = float(df_d['open'].iloc[-1])
         day_atr = float(df_d['atr'].iloc[-2])
         day_close_prev = float(df_d['close'].iloc[-2])
-        day_high_prev = float(df_d['high'].iloc[-2])
-        day_low_prev = float(df_d['low'].iloc[-2])
 
         atr_ann_pct = (day_atr / day_close_prev) * sqrt252 * 100
         effvol = 0.69 * atr_ann_pct + 0.0
@@ -231,73 +183,12 @@ def calculate_adaptive_zones(symbol_key):
             'ws_low': round(P + dist_weak - ww / 2),
             'ws_high': round(P + dist_weak + ww / 2),
             'ss_low': round(P + dist_strong - ws / 2),
-            'ss_high': round(P + dist_strong + ws / 2),
-            'dpoc': round((day_high_prev + day_low_prev + day_close_prev) / 3)
-        }
-
-    # 2. WEEKLY ZONES
-    df_w = fetch_candles(symbol_key, interval=Interval.in_weekly, n_bars=30)
-    if df_w is not None and len(df_w) >= 6:
-        df_w['atr'] = ta.atr(df_w['high'], df_w['low'], df_w['close'], length=5)
-        week_open = float(df_w['open'].iloc[-1])
-        w_atr_weekly = float(df_w['atr'].iloc[-2])
-        w_close_prev = float(df_w['close'].iloc[-2])
-
-        w_atr_ann_pct = (w_atr_weekly / w_close_prev) * math.sqrt(52) * 100
-        effvol_w = 0.68 * w_atr_ann_pct + 0.0
-        P_w = round(week_open)
-        sigma_w = P_w * effvol_w / (100.0 * math.sqrt(252.0 / 5.0))
-        dist_strong_w = sigma_w
-        dist_weak_w = sigma_w / (2.0 * sqrt2)
-        ws_w = round(sigma_w / 4.0)
-        ww_w = round(sigma_w / (4.0 * phi))
-
-        zones['Weekly'] = {
-            'wsd_low': round(P_w - dist_strong_w - ws_w / 2),
-            'wsd_high': round(P_w - dist_strong_w + ws_w / 2),
-            'wwd_low': round(P_w - dist_weak_w - ww_w / 2),
-            'wwd_high': round(P_w - dist_weak_w + ww_w / 2),
-            'wws_low': round(P_w + dist_weak_w - ww_w / 2),
-            'wws_high': round(P_w + dist_weak_w + ww_w / 2),
-            'wss_low': round(P_w + dist_strong_w - ws_w / 2),
-            'wss_high': round(P_w + dist_strong_w + ws_w / 2),
-            'wpoc': P_w + 8
-        }
-
-    # 3. MONTHLY ZONES
-    df_m = fetch_candles(symbol_key, interval=Interval.in_monthly, n_bars=24)
-    if df_m is not None and len(df_m) >= 21:
-        df_m['atr'] = ta.atr(df_m['high'], df_m['low'], df_m['close'], length=20)
-        month_open = float(df_m['open'].iloc[-1])
-        m_atr_monthly = float(df_m['atr'].iloc[-2])
-        m_close_prev = float(df_m['close'].iloc[-2])
-        m_high_prev = float(df_m['high'].iloc[-2])
-        m_low_prev = float(df_m['low'].iloc[-2])
-
-        m_atr_ann_pct = (m_atr_monthly / month_open) * math.sqrt(12) * 100
-        effvol_m = 0.90 * m_atr_ann_pct + 0.0
-        P_m = round(month_open)
-        sigma_m = P_m * effvol_m / (100.0 * math.sqrt(12.0))
-        dist_strong_m = sigma_m
-        dist_weak_m = sigma_m / 2.77
-        ws_m = round(sigma_m / 4.35)
-        ww_m = round(sigma_m / 5.1)
-
-        zones['Monthly'] = {
-            'msd_low': round(P_m - dist_strong_m - ws_m / 2),
-            'msd_high': round(P_m - dist_strong_m + ws_m / 2),
-            'mwd_low': round(P_m - dist_weak_m - ww_m / 2),
-            'mwd_high': round(P_m - dist_weak_m + ww_m / 2),
-            'mws_low': round(P_m + dist_weak_m - ww_m / 2),
-            'mws_high': round(P_m + dist_weak_m + ww_m / 2),
-            'mss_low': round(P_m + dist_strong_m - ws_m / 2),
-            'mss_high': round(P_m + dist_strong_m + ws_m / 2),
-            'mpoc': round((m_high_prev + m_low_prev + m_close_prev) / 3)
+            'ss_high': round(P + dist_strong + ws / 2)
         }
 
     return zones
 
-# SECTION 4: LORENTZIAN CLASSIFICATION ML ENGINE (STRICT UI ARROW FILTER)
+# SECTION 3: LORENTZIAN CLASSIFICATION ML ENGINE (EXACT UI ARROWS FILTER)
 def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=1000, ema_len=20):
     if df is None or len(df) < max(50, ema_len):
         return df
@@ -305,7 +196,6 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
     df_calc = df.copy()
     df_calc['hlc3'] = (df_calc['high'] + df_calc['low'] + df_calc['close']) / 3.0
     
-    # Technical features matching Pine Script
     f1 = ta.rsi(df_calc['close'], length=14)
     f2 = ta.rsi(df_calc['hlc3'], length=10)
     f3 = ta.cci(df_calc['high'], df_calc['low'], df_calc['close'], length=20)
@@ -317,7 +207,6 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
     features = pd.concat([f1, f2, f3, f4, f5], axis=1).fillna(0).values
     close_vals = df_calc['close'].values
     
-    # Calculate EMA Filter Line (Green/Red trend line on UI)
     df_calc['ema_filter'] = ta.ema(df_calc['close'], length=ema_len)
     ema_vals = df_calc['ema_filter'].values
     
@@ -341,8 +230,6 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
             pred_val = np.sum(y_train[start_idx + nearest_indices])
             predictions[idx] = pred_val
 
-    # --- UI ARROW FILTER LOGIC ---
-    # Only trigger signal when ML prediction matches EMA line AND is the FIRST bar
     ml_signal = np.zeros(len(df_calc))
     
     for i in range(1, len(df_calc)):
@@ -352,10 +239,8 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
         is_bearish = (predictions[i] < 0) and (close_vals[i] < ema_vals[i])
         was_bearish = (predictions[i-1] < 0) and (close_vals[i-1] < ema_vals[i-1])
 
-        # GREEN UP ARROW DRAWN ON UI
         if is_bullish and not was_bullish:
             ml_signal[i] = 1
-        # RED DOWN ARROW DRAWN ON UI
         elif is_bearish and not was_bearish:
             ml_signal[i] = -1
         else:
@@ -368,7 +253,7 @@ def calculate_lorentzian_classification(df, neighbors_count=8, max_bars_back=100
 # ==========================================
 # 💡 TP BUBBLE CALCULATION ENGINE
 # ==========================================
-def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0, sl1_val=1.5):
+def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0):
     if df is None or len(df) < slow_len + atr_len:
         return "TP1 50.0%", 1, 50.0
 
@@ -435,7 +320,7 @@ def calculate_suggested_tp_bubble(df, suggest_metric="Hit Rate", fast_len=9, slo
     return bubble_text, best_tp, best_rate
 
 # ==========================================
-# CORE ALERT PROCESSOR (STRICT 5 CATEGORIES)
+# CORE ALERT PROCESSOR (4-HOUR COOLDOWN)
 # ==========================================
 def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
@@ -461,8 +346,6 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         header_text = "🔴 *[SUPPLY]* 🔴\n\n"
     elif category_title == "IMPORTANT LEVEL":
         header_text = "🟡 *[IMPORTANT LEVEL]* 🟡\n\n"
-    elif category_title == "TREND CROSS OVER":
-        header_text = "⚡ *[TREND CROSS OVER]* ⚡\n\n"
     elif category_title == "TREND CHANGING":
         header_text = "🔄 *[TREND CHANGING]* 🔄\n\n"
     else:
@@ -485,111 +368,90 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
-# MAIN SCANNER ROUTINE (BTC & GOLD HYBRID)
+# MAIN SCANNER ROUTINE (CONFIRMED 15M ONLY)
 # ==========================================
 def analyze_market(symbol_key):
     try:
         cfg = SYMBOL_CONFIG[symbol_key]
         target_tf = cfg["interval_tv"]
 
-        # Fetch 15-minute candle dataframe
         df_main = fetch_candles(symbol_key, interval=target_tf, n_bars=1000)
         if df_main is None or len(df_main) < 50: return
         
-        # Calculate 15M RSIs
+        # Calculate 15M RSIs on confirmed close
         df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
-        live_rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
+        confirmed_rsi_15m = float(df_main['rsi_15m_calc'].iloc[-2])
 
         df_5m_temp = fetch_candles(symbol_key, interval=Interval.in_5_minute, n_bars=100)
         if df_5m_temp is not None and not df_5m_temp.empty:
             df_5m_temp['rsi_5m_calc'] = ta.rsi(df_5m_temp['close'], length=14, mamode='rma')
-            live_rsi_5m = float(df_5m_temp['rsi_5m_calc'].iloc[-1])
+            confirmed_rsi_5m = float(df_5m_temp['rsi_5m_calc'].iloc[-2])
         else:
-            live_rsi_5m = np.nan
+            confirmed_rsi_5m = np.nan
 
-        # LIVE PRICES (Used for Instant Intrabar Zone/Level Touches)
-        live_price = float(df_main['close'].iloc[-1])
-        live_high = float(df_main['high'].iloc[-1])
-        live_low = float(df_main['low'].iloc[-1])
-
-        # CONFIRMED PRICES (Used for 15M Candle Close ML Arrow Signals)
+        # STRICT CONFIRMED 15-MINUTE CANDLE PRICES (iloc[-2])
         confirmed_close = float(df_main['close'].iloc[-2])
         prev_close = float(df_main['close'].iloc[-3])
+        confirmed_high = float(df_main['high'].iloc[-2])
+        confirmed_low = float(df_main['low'].iloc[-2])
+        prev_low = float(df_main['low'].iloc[-3])
+        prev_high = float(df_main['high'].iloc[-3])
 
         tp_bubble_text, _, _ = calculate_suggested_tp_bubble(df_main)
 
         # ---------------------------------------------------------------------
-        # 1. TREND CHANGING (Lorentzian ML Arrow Signal - STRICT 15M CANDLE CLOSE)
+        # 1. TREND CHANGING (Lorentzian ML Arrow Signal - STRICT 15M CLOSE)
         # ---------------------------------------------------------------------
         df_ml = calculate_lorentzian_classification(df_main)
         if df_ml is not None and 'ml_signal' in df_ml.columns and len(df_ml) >= 3:
-            # iloc[-2] targets the newly closed 15-minute candle
             ml_sig_curr = df_ml['ml_signal'].iloc[-2]
 
-            # Fired ONLY when the green (1) or red (-1) arrow is created on candle close
             if ml_sig_curr == 1:
                 process_alert(
-                    alert_key=f"{symbol_key}_Lorentzian_Green_Arrow_15M",
+                    alert_key=f"{symbol_key}_TREND_CHANGING_BULLISH",
                     symbol_key=symbol_key, category_title="TREND CHANGING",
-                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
-                    tp_bubble=tp_bubble_text, cooldown_sec=ARROW_COOLDOWN_SEC
+                    price=confirmed_close, rsi_5m=confirmed_rsi_5m, rsi_15m=confirmed_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=STRICT_COOLDOWN_SEC
                 )
             elif ml_sig_curr == -1:
                 process_alert(
-                    alert_key=f"{symbol_key}_Lorentzian_Red_Arrow_15M",
+                    alert_key=f"{symbol_key}_TREND_CHANGING_BEARISH",
                     symbol_key=symbol_key, category_title="TREND CHANGING",
-                    price=confirmed_close, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
-                    tp_bubble=tp_bubble_text, cooldown_sec=ARROW_COOLDOWN_SEC
+                    price=confirmed_close, rsi_5m=confirmed_rsi_5m, rsi_15m=confirmed_rsi_15m,
+                    tp_bubble=tp_bubble_text, cooldown_sec=STRICT_COOLDOWN_SEC
                 )
 
         # ---------------------------------------------------------------------
-        # 2. DEMAND & SUPPLY ZONES (INSTANT INTRABAR TOUCHES - 15M COOLDOWN)
+        # 2. DEMAND & SUPPLY ZONES (CONFIRMED 15M CANDLE CLOSE - 4H COOLDOWN)
         # ---------------------------------------------------------------------
         all_zones = calculate_adaptive_zones(symbol_key)
 
-        # Daily Zone Touch Checks
         if 'Daily' in all_zones:
             z = all_zones['Daily']
-            if live_low <= z['sd_high'] and live_price >= z['sd_low']:
-                process_alert(f"{symbol_key}_Daily_SD_Touch", symbol_key, "DEMAND", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-            if live_low <= z['wd_high'] and live_price >= z['wd_low']:
-                process_alert(f"{symbol_key}_Daily_WD_Touch", symbol_key, "DEMAND", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-            if live_high >= z['ws_low'] and live_price <= z['ws_high']:
-                process_alert(f"{symbol_key}_Daily_WS_Touch", symbol_key, "SUPPLY", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-            if live_high >= z['ss_low'] and live_price <= z['ss_high']:
-                process_alert(f"{symbol_key}_Daily_SS_Touch", symbol_key, "SUPPLY", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-
-        # Weekly Zone Touch Checks
-        if 'Weekly' in all_zones:
-            z = all_zones['Weekly']
-            if live_low <= z['wsd_high'] and live_price >= z['wsd_low']:
-                process_alert(f"{symbol_key}_Weekly_SD_Touch", symbol_key, "DEMAND", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-            if live_high >= z['wss_low'] and live_price <= z['wss_high']:
-                process_alert(f"{symbol_key}_Weekly_SS_Touch", symbol_key, "SUPPLY", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-
-        # Monthly Zone Touch Checks
-        if 'Monthly' in all_zones:
-            z = all_zones['Monthly']
-            if live_low <= z['msd_high'] and live_price >= z['msd_low']:
-                process_alert(f"{symbol_key}_Monthly_SD_Touch", symbol_key, "DEMAND", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
-            if live_high >= z['mss_low'] and live_price <= z['mss_high']:
-                process_alert(f"{symbol_key}_Monthly_SS_Touch", symbol_key, "SUPPLY", live_price, live_rsi_5m, live_rsi_15m, tp_bubble_text, ZONE_COOLDOWN_SEC)
+            # Demand Touch: Low entered zone
+            if confirmed_low <= z['sd_high'] and prev_low > z['sd_high']:
+                process_alert(f"{symbol_key}_DEMAND_ZONE", symbol_key, "DEMAND", confirmed_close, confirmed_rsi_5m, confirmed_rsi_15m, tp_bubble_text, STRICT_COOLDOWN_SEC)
+            # Supply Touch: High entered zone
+            elif confirmed_high >= z['ws_low'] and prev_high < z['ws_low']:
+                process_alert(f"{symbol_key}_SUPPLY_ZONE", symbol_key, "SUPPLY", confirmed_close, confirmed_rsi_5m, confirmed_rsi_15m, tp_bubble_text, STRICT_COOLDOWN_SEC)
 
         # ---------------------------------------------------------------------
-        # 3. IMPORTANT LEVELS (INSTANT INTRABAR LEVEL TOUCHES - 15M COOLDOWN)
+        # 3. IMPORTANT LEVELS (CONFIRMED 15M CANDLE CROSS - 4H COOLDOWN)
         # ---------------------------------------------------------------------
         htf_levels = calculate_htf_levels(symbol_key)
         if htf_levels:
             for lvl_name, lvl_val in htf_levels.items():
                 if pd.isna(lvl_val): continue
                 
-                # Check if current live price touches or crosses level (within 0.1% tolerance)
-                if abs(live_price - lvl_val) / lvl_val <= 0.001:
+                crossed_above = (prev_close <= lvl_val) and (confirmed_close > lvl_val)
+                crossed_below = (prev_close >= lvl_val) and (confirmed_close < lvl_val)
+
+                if crossed_above or crossed_below:
                     process_alert(
-                        alert_key=f"{symbol_key}_{lvl_name}_Level_Touch",
+                        alert_key=f"{symbol_key}_IMPORTANT_LEVEL",
                         symbol_key=symbol_key, category_title="IMPORTANT LEVEL",
-                        price=live_price, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
-                        tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC
+                        price=confirmed_close, rsi_5m=confirmed_rsi_5m, rsi_15m=confirmed_rsi_15m,
+                        tp_bubble=tp_bubble_text, cooldown_sec=STRICT_COOLDOWN_SEC
                     )
 
     except Exception as e:
@@ -599,8 +461,8 @@ def analyze_market(symbol_key):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BTC & GOLD TradingView Scanner Fully Online...")
-    send_telegram_message("🚀 *BTC & GOLD Hybrid TradingView Scanner Online* 🚀\n• Instant Intrabar Zone/Level Alerts (15M Cooldown)\n• Confirmed 15M Candle-Close ML Trend Arrows (4H Cooldown)")
+    print(f"BTC & GOLD Strict 15M Scanner Online...")
+    send_telegram_message("🚀 *Strict BTC & GOLD 15M Scanner Online* 🚀\n• All alerts locked to 15M Candle Closes.\n• Enforced 4-Hour Global Cooldown per asset.")
     
     while True:
         try:
