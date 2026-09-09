@@ -47,7 +47,7 @@ TELEGRAM_CHAT_IDS = [
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
 # ==========================================
-# 📋 BTC & GOLD 15-MINUTE WATCHLIST CONFIG
+# 📋 WATCHLIST CONFIG (BTC, GOLD & NIFTY)
 # ==========================================
 SYMBOL_CONFIG = {
     "BTCUSDT": {
@@ -55,14 +55,24 @@ SYMBOL_CONFIG = {
         "exchange": "BINANCE",
         "display": "BITCOIN (BTC/USDT)",
         "interval_tv": Interval.in_15_minute,
-        "label": "15 Minutes"
+        "label": "15 Minutes",
+        "currency": "$"
     },
     "PAXGUSDT": {
         "tv_symbol": "PAXGUSDT",
         "exchange": "BINANCE",
         "display": "GOLD SPOT (PAXG/USDT)",
         "interval_tv": Interval.in_15_minute,
-        "label": "15 Minutes"
+        "label": "15 Minutes",
+        "currency": "$"
+    },
+    "NIFTY50": {
+        "tv_symbol": "NIFTY",
+        "exchange": "NSE",
+        "display": "NIFTY 50 (NSE)",
+        "interval_tv": Interval.in_15_minute,
+        "label": "15 Minutes",
+        "currency": "₹"
     }
 }
 
@@ -326,22 +336,28 @@ def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_v
     return bubble_text, best_tp, best_rate
 
 # ==========================================
-# CORE ALERT PROCESSOR
+# CORE ALERT PROCESSOR (WITH IST TIME)
 # ==========================================
 def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
     global tg_alert_cache, sms_alert_cache
-    now = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
     
-    if alert_key in tg_alert_cache and (now - tg_alert_cache[alert_key]).total_seconds() < cooldown_sec:
+    # Convert UTC to Indian Standard Time (IST)
+    ist_tz = pytz.timezone('Asia/Kolkata')
+    now_ist = now_utc.astimezone(ist_tz)
+    ist_time_str = now_ist.strftime("%d-%b-%Y %I:%M:%S %p IST")
+    
+    if alert_key in tg_alert_cache and (now_utc - tg_alert_cache[alert_key]).total_seconds() < cooldown_sec:
         return
 
-    tg_alert_cache[alert_key] = now
+    tg_alert_cache[alert_key] = now_utc
 
-    cfg = SYMBOL_CONFIG.get(symbol_key, {"display": symbol_key, "label": "15 Minutes"})
+    cfg = SYMBOL_CONFIG.get(symbol_key, {"display": symbol_key, "label": "15 Minutes", "currency": "$"})
     display_name = cfg["display"]
     tf_label = cfg["label"]
+    currency_symbol = cfg.get("currency", "$")
 
-    price_str = f"${price:,.2f}" if isinstance(price, (int, float)) else "N/A"
+    price_str = f"{currency_symbol}{price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
     bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
@@ -364,13 +380,14 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         f"• *Price:* `{price_str}`\n"
         f"• *RSI (5M):* `{rsi_5m_str}`\n"
         f"• *RSI (15M):* `{rsi_15m_str}`\n"
-        f"• *Suggested TP Bubble:* {bubble_str}"
+        f"• *Suggested TP Bubble:* {bubble_str}\n"
+        f"• *Time (IST):* `{ist_time_str}`"
     )
     send_telegram_message(tg_message)
 
-    if alert_key not in sms_alert_cache or (now - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
-        sms_alert_cache[alert_key] = now
-        alert_text = f"ALERT ({tf_label}): {display_name} | {category_title} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'}"
+    if alert_key not in sms_alert_cache or (now_utc - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
+        sms_alert_cache[alert_key] = now_utc
+        alert_text = f"ALERT ({tf_label}): {display_name} | {category_title} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'} | Time: {ist_time_str}"
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
@@ -473,8 +490,8 @@ def analyze_market(symbol_key):
 # RUNTIME LOOP
 # ==========================================
 def core_market_scanner_loop():
-    print(f"BTC & GOLD Full Engine Scanner Online...")
-    send_telegram_message("*BTC & GOLD Full Engine Scanner Online*")
+    print("BTC, GOLD & NIFTY50 Full Engine Scanner Online...")
+    send_telegram_message("*BTC, GOLD & NIFTY50 Full Engine Scanner Online*")
     
     while True:
         try:
