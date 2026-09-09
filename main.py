@@ -474,7 +474,7 @@ def analyze_market(symbol_key):
 # ==========================================
 def core_market_scanner_loop():
     print(f"BTC & GOLD Full Engine Scanner Online...")
-    send_telegram_message("🚀 *BTC & GOLD Full Engine Scanner Online* 🚀\n• Tracking PDH, PDL, PP & Gann Base Lines (0.03% Tolerance)\n• Instant Intrabar Zone Touches\n• Confirmed 15M ML Trend Arrows")
+    send_telegram_message("*BTC & GOLD Full Engine Scanner Online*")
     
     while True:
         try:
