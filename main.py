@@ -40,6 +40,7 @@ def run_web_server():
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 
 TELEGRAM_CHAT_IDS = [
+    "-5385748601",  # 📡 Signal Telegram Group
     "1136613703"    # Personal Telegram ID
 ]
 
