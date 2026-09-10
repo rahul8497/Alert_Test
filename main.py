@@ -39,10 +39,8 @@ def run_web_server():
 # ==========================================
 TELEGRAM_TOKEN = "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE"
 
-TELEGRAM_CHAT_IDS = [
-    "-5385748601",  # 📡 Signal Telegram Group
-    "1136613703"    # Personal Telegram ID
-]
+GROUP_CHAT_ID = "-5385748601"     # 📡 Signal Telegram Group (Demand, Supply, Trend Changing ONLY)
+PERSONAL_CHAT_ID = "1136613703"   # 👤 Personal Telegram ID (Important Level Touches ONLY)
 
 MAKE_WEBHOOK_URL = "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw"
 
@@ -89,14 +87,13 @@ tv = TvDatafeed()
 # ==========================================
 # DISPATCH PIPELINES
 # ==========================================
-def send_telegram_message(message):
+def send_telegram_message(message, target_chat_id):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    for chat_id in TELEGRAM_CHAT_IDS:
-        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
-        try:
-            requests.post(url, json=payload, timeout=10)
-        except Exception as e:
-            print(f"Error sending Telegram notification to {chat_id}: {e}")
+    payload = {"chat_id": target_chat_id, "text": message, "parse_mode": "Markdown"}
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Error sending Telegram notification to {target_chat_id}: {e}")
 
 def send_make_webhook(alert_data):
     try:
@@ -338,7 +335,7 @@ def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_v
 # ==========================================
 # CORE ALERT PROCESSOR (WITH IST TIME)
 # ==========================================
-def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400):
+def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400, level_name=None):
     global tg_alert_cache, sms_alert_cache
     now_utc = datetime.now(timezone.utc)
     
@@ -367,7 +364,7 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
     elif category_title == "SUPPLY":
         header_text = "🔴 *[SUPPLY]* 🔴\n\n"
     elif category_title == "IMPORTANT LEVEL":
-        header_text = "🟡 *[IMPORTANT LEVEL]* 🟡\n\n"
+        header_text = f"🟡 *[IMPORTANT LEVEL: {level_name}]* 🟡\n\n" if level_name else "🟡 *[IMPORTANT LEVEL]* 🟡\n\n"
     elif category_title == "TREND CHANGING":
         header_text = "🔄 *[TREND CHANGING]* 🔄\n\n"
     else:
@@ -383,11 +380,19 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         f"• *Suggested TP Bubble:* {bubble_str}\n"
         f"• *Time (IST):* `{ist_time_str}`"
     )
-    send_telegram_message(tg_message)
+
+    # 🎯 STRICT SEPARATE ROUTING
+    # Important Level alerts go ONLY to your Personal Chat ID
+    # Demand, Supply, and Trend Changing alerts go ONLY to the Group Chat ID
+    if category_title == "IMPORTANT LEVEL":
+        send_telegram_message(tg_message, target_chat_id=PERSONAL_CHAT_ID)
+    else:
+        send_telegram_message(tg_message, target_chat_id=GROUP_CHAT_ID)
 
     if alert_key not in sms_alert_cache or (now_utc - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
         sms_alert_cache[alert_key] = now_utc
-        alert_text = f"ALERT ({tf_label}): {display_name} | {category_title} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'} | Time: {ist_time_str}"
+        label_info = f"IMPORTANT LEVEL ({level_name})" if level_name else category_title
+        alert_text = f"ALERT ({tf_label}): {display_name} | {label_info} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'} | Time: {ist_time_str}"
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
@@ -458,7 +463,8 @@ def analyze_market(symbol_key):
                         alert_key=f"{symbol_key}_INSTANT_LEVEL_{lvl_name}_{round(lvl_val)}",
                         symbol_key=symbol_key, category_title="IMPORTANT LEVEL",
                         price=live_price, rsi_5m=live_rsi_5m, rsi_15m=live_rsi_15m,
-                        tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC
+                        tp_bubble=tp_bubble_text, cooldown_sec=ZONE_COOLDOWN_SEC,
+                        level_name=lvl_name
                     )
 
         # ---------------------------------------------------------------------
@@ -491,7 +497,7 @@ def analyze_market(symbol_key):
 # ==========================================
 def core_market_scanner_loop():
     print("BTC, GOLD & NIFTY50 Full Engine Scanner Online...")
-    send_telegram_message("*BTC, GOLD & NIFTY50 Full Engine Scanner Online*")
+    send_telegram_message("*BTC, GOLD & NIFTY50 Full Engine Scanner Online*", target_chat_id=GROUP_CHAT_ID)
     
     while True:
         try:
