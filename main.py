@@ -54,7 +54,8 @@ SYMBOL_CONFIG = {
         "display": "BITCOIN (BTC/USDT)",
         "interval_tv": Interval.in_15_minute,
         "label": "15 Minutes",
-        "currency": "$"
+        "currency": "$",
+        "is_24_7": True
     },
     "PAXGUSDT": {
         "tv_symbol": "PAXGUSDT",
@@ -62,7 +63,8 @@ SYMBOL_CONFIG = {
         "display": "GOLD SPOT (PAXG/USDT)",
         "interval_tv": Interval.in_15_minute,
         "label": "15 Minutes",
-        "currency": "$"
+        "currency": "$",
+        "is_24_7": True
     },
     "NIFTY50": {
         "tv_symbol": "NIFTY",
@@ -70,7 +72,8 @@ SYMBOL_CONFIG = {
         "display": "NIFTY 50 (NSE)",
         "interval_tv": Interval.in_15_minute,
         "label": "15 Minutes",
-        "currency": "₹"
+        "currency": "₹",
+        "is_24_7": False
     }
 }
 
@@ -80,9 +83,39 @@ ARROW_COOLDOWN_SEC = 14400  # 4 Hours Cooldown for Confirmed Candle-Close ML Arr
 
 tg_alert_cache = {}
 sms_alert_cache = {}
+last_processed_candle = {}
 
 # Initialize TradingView Feed Client
 tv = TvDatafeed()
+
+# ==========================================
+# 🕒 MARKET TIME & SCHEDULE ENGINE
+# ==========================================
+def is_market_open(symbol_key):
+    cfg = SYMBOL_CONFIG.get(symbol_key)
+    if not cfg:
+        return False
+    
+    # Crypto / 24x7 Assets
+    if cfg.get("is_24_7", False):
+        return True
+
+    # Indian Market Session Check (NSE)
+    if cfg.get("exchange") == "NSE":
+        ist_tz = pytz.timezone('Asia/Kolkata')
+        now_ist = datetime.now(timezone.utc).astimezone(ist_tz)
+        
+        # Check Weekend (5 = Saturday, 6 = Sunday)
+        if now_ist.weekday() >= 5:
+            return False
+            
+        # Check standard market hours (09:15 AM to 03:30 PM IST)
+        market_start = now_ist.replace(hour=9, minute=15, second=0, microsecond=0)
+        market_end = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+        
+        return market_start <= now_ist <= market_end
+
+    return True
 
 # ==========================================
 # DISPATCH PIPELINES
@@ -399,13 +432,24 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
 # MAIN SCANNER ROUTINE
 # ==========================================
 def analyze_market(symbol_key):
+    global last_processed_candle
     try:
+        # Check if exchange is currently open for this asset
+        if not is_market_open(symbol_key):
+            return
+
         cfg = SYMBOL_CONFIG[symbol_key]
         target_tf = cfg["interval_tv"]
 
         df_main = fetch_candles(symbol_key, interval=target_tf, n_bars=1000)
         if df_main is None or len(df_main) < 50: return
-        
+
+        # Validate stale candles during market close or off-hours
+        latest_candle_time = str(df_main['timestamp'].iloc[-1])
+        if last_processed_candle.get(symbol_key) == latest_candle_time and not cfg.get("is_24_7", False):
+            return
+        last_processed_candle[symbol_key] = latest_candle_time
+
         # Live and Confirmed RSIs
         df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
         live_rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
