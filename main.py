@@ -64,7 +64,7 @@ SYMBOL_CONFIG = {
 }
 
 # --- COOLDOWN TIMER (4 HOURS) ---
-ALERT_COOLDOWN_SEC = 14400
+ZONE_COOLDOWN_SEC = 14400
 
 tg_alert_cache = {}
 sms_alert_cache = {}
@@ -114,7 +114,7 @@ def send_telegram_message(message):
             if resp.status_code == 200:
                 return
         except Exception as e:
-            print(f"Telegram send error: {e}")
+            print(f"Error sending Telegram notification: {e}")
             time.sleep(1)
 
 def send_make_webhook(alert_data):
@@ -124,13 +124,13 @@ def send_make_webhook(alert_data):
             if resp.status_code < 300:
                 return
         except Exception as e:
-            print(f"Make Webhook send error: {e}")
+            print(f"Error sending Make Webhook: {e}")
             time.sleep(1)
 
 # ==========================================
 # 🟢 TRADINGVIEW CANDLE FETCHING ENGINE
 # ==========================================
-def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=50):
+def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=150):
     cfg = SYMBOL_CONFIG.get(symbol_key)
     if not cfg:
         return None
@@ -149,7 +149,7 @@ def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=50):
                 df.rename(columns={c: str(c).lower() for c in df.columns}, inplace=True)
                 return df
         except Exception as e:
-            print(f"Fetch error for {symbol_key}: {e}")
+            print(f"TradingView Candle fetch error for {symbol_key}: {e}")
         
         reconnect_tv()
         time.sleep(1)
@@ -185,7 +185,7 @@ def get_ui_levels(symbol_key):
 
         htf["PDH"] = pdh
         htf["PDL"] = pdl
-        htf["PP (Pivot Point)"] = pdp
+        htf["PP"] = pdp
         htf["Gann Base"] = gann_base
 
         df_d['atr'] = ta.atr(df_d['high'], df_d['low'], df_d['close'], length=20)
@@ -203,13 +203,13 @@ def get_ui_levels(symbol_key):
             ww = round(sigma / (4.0 * phi))
 
             supports = {
-                "Support 1 (Daily Weak Demand)":     (round(P - dist_weak   - ww / 2), round(P - dist_weak   + ww / 2)),
-                "Support 2 (Daily Strong Demand)":   (round(P - dist_strong - ws / 2), round(P - dist_strong + ws / 2)),
+                "Weak Demand":   (round(P - dist_weak   - ww / 2), round(P - dist_weak   + ww / 2)),
+                "Strong Demand": (round(P - dist_strong - ws / 2), round(P - dist_strong + ws / 2)),
             }
 
             resistances = {
-                "Resistance 1 (Daily Weak Supply)":   (round(P + dist_weak   - ww / 2), round(P + dist_weak   + ww / 2)),
-                "Resistance 2 (Daily Strong Supply)": (round(P + dist_strong - ws / 2), round(P + dist_strong + ws / 2)),
+                "Weak Supply":   (round(P + dist_weak   - ww / 2), round(P + dist_weak   + ww / 2)),
+                "Strong Supply": (round(P + dist_strong - ws / 2), round(P + dist_strong + ws / 2)),
             }
 
     # 2. WEEKLY HTF (PWH, PWL)
@@ -234,18 +234,72 @@ def get_ui_levels(symbol_key):
     return htf, supports, resistances
 
 # ==========================================
-# CORE ALERT PROCESSOR
+# 💡 TP BUBBLE CALCULATION ENGINE (VECTORIZED)
 # ==========================================
-def process_alert(alert_key, symbol_key, category_title, detail_label, price):
+def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0):
+    if df is None or len(df) < slow_len + atr_len + 20:
+        return "TP1 50.0%", 1, 50.0
+
+    fast_ema = ta.ema(df['close'], length=fast_len).to_numpy()
+    slow_ema = ta.ema(df['close'], length=slow_len).to_numpy()
+    atr = ta.atr(df['high'], df['low'], df['close'], length=atr_len).to_numpy()
+    closes = df['close'].to_numpy()
+    highs = df['high'].to_numpy()
+    lows = df['low'].to_numpy()
+
+    n = len(df)
+    prev_f, curr_f = fast_ema[slow_len-1:n-21], fast_ema[slow_len:n-20]
+    prev_s, curr_s = slow_ema[slow_len-1:n-21], slow_ema[slow_len:n-20]
+
+    crossovers = (prev_f <= prev_s) & (curr_f > curr_s)
+    crossunders = (prev_f >= prev_s) & (curr_f < curr_s)
+    signal_indices = np.where(crossovers | crossunders)[0] + slow_len
+
+    total_trades, tp1_hits, tp2_hits, tp3_hits = 0, 0, 0, 0
+
+    for i in signal_indices:
+        atr_v = atr[i]
+        if np.isnan(atr_v) or atr_v == 0:
+            continue
+
+        direction = 1 if fast_ema[i] > slow_ema[i] else -1
+        entry_price = closes[i]
+        total_trades += 1
+
+        end_j = min(i + 30, n)
+        if direction == 1:
+            max_h = np.max(highs[i+1:end_j])
+            if max_h >= entry_price + tp1_val * atr_v: tp1_hits += 1
+            if max_h >= entry_price + tp2_val * atr_v: tp2_hits += 1
+            if max_h >= entry_price + tp3_val * atr_v: tp3_hits += 1
+        else:
+            min_l = np.min(lows[i+1:end_j])
+            if min_l <= entry_price - tp1_val * atr_v: tp1_hits += 1
+            if min_l <= entry_price - tp2_val * atr_v: tp2_hits += 1
+            if min_l <= entry_price - tp3_val * atr_v: tp3_hits += 1
+
+    tr = max(1, total_trades)
+    rates = [(1, (tp1_hits / tr) * 100), (2, (tp2_hits / tr) * 100), (3, (tp3_hits / tr) * 100)]
+    best_tp, best_rate = max(rates, key=lambda x: x[1])
+
+    return f"TP{best_tp} {best_rate:.1f}%", best_tp, best_rate
+
+# ==========================================
+# CORE ALERT PROCESSOR (EXACT ORIGINAL MESSAGE FORMAT)
+# ==========================================
+def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400, level_name=None):
+    global tg_alert_cache, sms_alert_cache
     now_utc = datetime.now(timezone.utc)
     
-    if alert_key in tg_alert_cache and (now_utc - tg_alert_cache[alert_key]).total_seconds() < ALERT_COOLDOWN_SEC:
+    # Convert UTC to Indian Standard Time (IST)
+    ist_tz = pytz.timezone('Asia/Kolkata')
+    now_ist = now_utc.astimezone(ist_tz)
+    ist_time_str = now_ist.strftime("%d-%b-%Y %I:%M:%S %p IST")
+    
+    if alert_key in tg_alert_cache and (now_utc - tg_alert_cache[alert_key]).total_seconds() < cooldown_sec:
         return
 
     tg_alert_cache[alert_key] = now_utc
-
-    ist_tz = pytz.timezone('Asia/Kolkata')
-    ist_time_str = now_utc.astimezone(ist_tz).strftime("%d-%b-%Y %I:%M:%S %p IST")
 
     cfg = SYMBOL_CONFIG.get(symbol_key, {"display": symbol_key, "label": "15 Minutes", "currency": "$"})
     display_name = cfg["display"]
@@ -253,26 +307,38 @@ def process_alert(alert_key, symbol_key, category_title, detail_label, price):
     currency_symbol = cfg.get("currency", "$")
 
     price_str = f"{currency_symbol}{price:,.2f}" if isinstance(price, (int, float)) else "N/A"
+    rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
+    rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
+    bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
-    if category_title == "SUPPORT":
-        header_text = f"🟢 *[SUPPORT TOUCHED: {detail_label}]* 🟢\n\n"
-    elif category_title == "RESISTANCE":
-        header_text = f"🔴 *[RESISTANCE TOUCHED: {detail_label}]* 🔴\n\n"
+    if category_title == "DEMAND":
+        header_text = "🟢 *[DEMAND]* 🟢\n\n"
+    elif category_title == "SUPPLY":
+        header_text = "🔴 *[SUPPLY]* 🔴\n\n"
+    elif category_title == "IMPORTANT LEVEL":
+        header_text = f"🟡 *[IMPORTANT LEVEL: {level_name}]* 🟡\n\n" if level_name else "🟡 *[IMPORTANT LEVEL]* 🟡\n\n"
+    elif category_title == "TREND CHANGING":
+        header_text = "🔄 *[TREND CHANGING]* 🔄\n\n"
     else:
-        header_text = f"🟡 *[HTF LEVEL TOUCHED: {detail_label}]* 🟡\n\n"
+        header_text = f"📢 *[{category_title}]* 📢\n\n"
 
     tg_message = (
         f"{header_text}"
         f"• *Asset:* `{display_name}`\n"
+        f"• *Timeframe:* `{tf_label}`\n"
         f"• *Price:* `{price_str}`\n"
+        f"• *RSI (5M):* `{rsi_5m_str}`\n"
+        f"• *RSI (15M):* `{rsi_15m_str}`\n"
+        f"• *Suggested TP Bubble:* {bubble_str}\n"
         f"• *Time (IST):* `{ist_time_str}`"
     )
 
     send_telegram_message(tg_message)
 
-    if alert_key not in sms_alert_cache or (now_utc - sms_alert_cache[alert_key]).total_seconds() >= ALERT_COOLDOWN_SEC:
+    if alert_key not in sms_alert_cache or (now_utc - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
         sms_alert_cache[alert_key] = now_utc
-        alert_text = f"ALERT ({tf_label}): {display_name} | {category_title}: {detail_label} | Price: {price_str} | Time: {ist_time_str}"
+        label_info = f"IMPORTANT LEVEL ({level_name})" if level_name else category_title
+        alert_text = f"ALERT ({tf_label}): {display_name} | {label_info} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'} | Time: {ist_time_str}"
         send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
 
 # ==========================================
@@ -284,8 +350,8 @@ def analyze_market(symbol_key):
             return
 
         cfg = SYMBOL_CONFIG[symbol_key]
-        df_main = fetch_candles(symbol_key, interval=cfg["interval_tv"], n_bars=10)
-        if df_main is None or df_main.empty:
+        df_main = fetch_candles(symbol_key, interval=cfg["interval_tv"], n_bars=150)
+        if df_main is None or len(df_main) < 50:
             return
 
         live_price = float(df_main['close'].iloc[-1])
@@ -294,26 +360,55 @@ def analyze_market(symbol_key):
 
         htf_levels, support_bands, resistance_bands = get_ui_levels(symbol_key)
 
-        # 1. TWO SUPPORT BANDS (Daily Weak Demand & Daily Strong Demand - Green Zones)
+        # Helper to compute RSI & TP Bubble only when an alert triggers
+        def get_alert_metrics():
+            df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
+            rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
+
+            df_5m_temp = fetch_candles(symbol_key, interval=Interval.in_5_minute, n_bars=50)
+            if df_5m_temp is not None and len(df_5m_temp) >= 15:
+                df_5m_temp['rsi_5m_calc'] = ta.rsi(df_5m_temp['close'], length=14, mamode='rma')
+                rsi_5m = float(df_5m_temp['rsi_5m_calc'].iloc[-1])
+            else:
+                rsi_5m = np.nan
+
+            tp_bubble, _, _ = calculate_suggested_tp_bubble(df_main)
+            return rsi_5m, rsi_15m, tp_bubble
+
+        metrics_cache = None
+
+        # 1. TWO SUPPORT BANDS (Daily Weak Demand & Daily Strong Demand)
         for band_name, (z_low, z_high) in support_bands.items():
             if live_low <= z_high and live_price >= z_low:
+                if metrics_cache is None:
+                    metrics_cache = get_alert_metrics()
+                rsi_5m, rsi_15m, tp_bubble = metrics_cache
                 process_alert(
-                    alert_key=f"{symbol_key}_SUP_{band_name}_{z_low}_{z_high}",
+                    alert_key=f"{symbol_key}_INSTANT_DEMAND_{band_name}_{z_high}",
                     symbol_key=symbol_key,
-                    category_title="SUPPORT",
-                    detail_label=f"{band_name} [{z_low} - {z_high}]",
-                    price=live_price
+                    category_title="DEMAND",
+                    price=live_price,
+                    rsi_5m=rsi_5m,
+                    rsi_15m=rsi_15m,
+                    tp_bubble=tp_bubble,
+                    cooldown_sec=ZONE_COOLDOWN_SEC
                 )
 
-        # 2. TWO RESISTANCE BANDS (Daily Weak Supply & Daily Strong Supply - Orange/Red Zones)
+        # 2. TWO RESISTANCE BANDS (Daily Weak Supply & Daily Strong Supply)
         for band_name, (z_low, z_high) in resistance_bands.items():
             if live_high >= z_low and live_price <= z_high:
+                if metrics_cache is None:
+                    metrics_cache = get_alert_metrics()
+                rsi_5m, rsi_15m, tp_bubble = metrics_cache
                 process_alert(
-                    alert_key=f"{symbol_key}_RES_{band_name}_{z_low}_{z_high}",
+                    alert_key=f"{symbol_key}_INSTANT_SUPPLY_{band_name}_{z_low}",
                     symbol_key=symbol_key,
-                    category_title="RESISTANCE",
-                    detail_label=f"{band_name} [{z_low} - {z_high}]",
-                    price=live_price
+                    category_title="SUPPLY",
+                    price=live_price,
+                    rsi_5m=rsi_5m,
+                    rsi_15m=rsi_15m,
+                    tp_bubble=tp_bubble,
+                    cooldown_sec=ZONE_COOLDOWN_SEC
                 )
 
         # 3. HTF & PIVOT BADGES (PDH, PDL, PWH, PWL, PMH, PML, PP, Gann Base)
@@ -321,15 +416,22 @@ def analyze_market(symbol_key):
             if pd.isna(lvl_val) or lvl_val == 0:
                 continue
             touched_intrabar = (live_low <= lvl_val <= live_high)
-            near_level = (abs(live_price - lvl_val) / lvl_val <= 0.0004)
+            near_level = (abs(live_price - lvl_val) / lvl_val <= 0.0003)
 
             if touched_intrabar or near_level:
+                if metrics_cache is None:
+                    metrics_cache = get_alert_metrics()
+                rsi_5m, rsi_15m, tp_bubble = metrics_cache
                 process_alert(
-                    alert_key=f"{symbol_key}_HTF_{lvl_name}_{round(lvl_val)}",
+                    alert_key=f"{symbol_key}_INSTANT_LEVEL_{lvl_name}_{round(lvl_val)}",
                     symbol_key=symbol_key,
-                    category_title="HTF LEVEL",
-                    detail_label=f"{lvl_name} @ {lvl_val:,.2f}",
-                    price=live_price
+                    category_title="IMPORTANT LEVEL",
+                    price=live_price,
+                    rsi_5m=rsi_5m,
+                    rsi_15m=rsi_15m,
+                    tp_bubble=tp_bubble,
+                    cooldown_sec=ZONE_COOLDOWN_SEC,
+                    level_name=lvl_name
                 )
 
     except Exception as e:
@@ -342,8 +444,8 @@ scanner_started = False
 scanner_start_lock = threading.Lock()
 
 def core_market_scanner_loop():
-    print("HTF, Support & Resistance Scanner Online...")
-    send_telegram_message("*HTF, Support & Resistance Scanner Online (PDH/PDL, PWH/PWL, PMH/PML, PP, Gann + 2 Support & 2 Resistance Bands)*")
+    print("BTC, GOLD & NIFTY50 Full Engine Scanner Online...")
+    send_telegram_message("*BTC, GOLD & NIFTY50 Full Engine Scanner Online*")
     
     while True:
         try:
@@ -369,7 +471,7 @@ app = Flask(__name__)
 @app.route('/health')
 def home():
     ensure_scanner_running()
-    return "Bot Status: ONLINE | HTF (PDH/PDL, PWH/PWL, PMH/PML, PP, Gann), 2 Support & 2 Resistance Bands Active", 200
+    return "Bot Status: ONLINE | Complete Engine (PDH, PDL, PP, Gann + Strict ML) Active", 200
 
 if __name__ == "__main__":
     ensure_scanner_running()
