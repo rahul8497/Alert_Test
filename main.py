@@ -22,11 +22,10 @@ if not hasattr(np, 'bool'):
     np.bool = bool
 
 # ==========================================
-# 🚨 CREDENTIALS & HOOKS (PERSONAL CHAT ONLY) 🚨
+# 🚨 CREDENTIALS (PERSONAL TELEGRAM ONLY) 🚨
 # ==========================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE")
 PERSONAL_CHAT_ID = os.environ.get("PERSONAL_CHAT_ID", "1136613703")
-MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL", "https://hook.us2.make.com/ztcvn6rzkkidnnwyn2c7imhtgz1yr3sw")
 
 http_session = requests.Session()
 
@@ -67,7 +66,6 @@ SYMBOL_CONFIG = {
 ZONE_COOLDOWN_SEC = 14400
 
 tg_alert_cache = {}
-sms_alert_cache = {}
 ui_levels_cache = {}
 
 tv_lock = threading.Lock()
@@ -103,7 +101,7 @@ def is_market_open(symbol_key):
     return True
 
 # ==========================================
-# DISPATCH PIPELINES (PERSONAL CHAT + MAKE EMAIL)
+# TELEGRAM DISPATCH PIPELINE
 # ==========================================
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -115,16 +113,6 @@ def send_telegram_message(message):
                 return
         except Exception as e:
             print(f"Error sending Telegram notification: {e}")
-            time.sleep(1)
-
-def send_make_webhook(alert_data):
-    for _ in range(2):
-        try:
-            resp = http_session.post(MAKE_WEBHOOK_URL, json=alert_data, timeout=10)
-            if resp.status_code < 300:
-                return
-        except Exception as e:
-            print(f"Error sending Make Webhook: {e}")
             time.sleep(1)
 
 # ==========================================
@@ -288,7 +276,7 @@ def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_v
 # CORE ALERT PROCESSOR (EXACT ORIGINAL MESSAGE FORMAT)
 # ==========================================
 def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400, level_name=None):
-    global tg_alert_cache, sms_alert_cache
+    global tg_alert_cache
     now_utc = datetime.now(timezone.utc)
     
     # Convert UTC to Indian Standard Time (IST)
@@ -335,12 +323,6 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
 
     send_telegram_message(tg_message)
 
-    if alert_key not in sms_alert_cache or (now_utc - sms_alert_cache[alert_key]).total_seconds() >= cooldown_sec:
-        sms_alert_cache[alert_key] = now_utc
-        label_info = f"IMPORTANT LEVEL ({level_name})" if level_name else category_title
-        alert_text = f"ALERT ({tf_label}): {display_name} | {label_info} | Price: {price_str} | Bubble: {tp_bubble if tp_bubble else 'N/A'} | Time: {ist_time_str}"
-        send_make_webhook({"body": alert_text, "text": alert_text, "message": alert_text})
-
 # ==========================================
 # MAIN SCANNER ROUTINE
 # ==========================================
@@ -360,7 +342,6 @@ def analyze_market(symbol_key):
 
         htf_levels, support_bands, resistance_bands = get_ui_levels(symbol_key)
 
-        # Helper to compute RSI & TP Bubble only when an alert triggers
         def get_alert_metrics():
             df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
             rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
