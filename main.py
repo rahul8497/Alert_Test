@@ -118,7 +118,7 @@ def send_telegram_message(message):
 # ==========================================
 # 🟢 TRADINGVIEW CANDLE FETCHING ENGINE
 # ==========================================
-def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=150):
+def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=50):
     cfg = SYMBOL_CONFIG.get(symbol_key)
     if not cfg:
         return None
@@ -222,60 +222,9 @@ def get_ui_levels(symbol_key):
     return htf, supports, resistances
 
 # ==========================================
-# 💡 TP BUBBLE CALCULATION ENGINE (VECTORIZED)
+# CORE ALERT PROCESSOR
 # ==========================================
-def calculate_suggested_tp_bubble(df, fast_len=9, slow_len=21, atr_len=14, tp1_val=1.0, tp2_val=2.0, tp3_val=3.0):
-    if df is None or len(df) < slow_len + atr_len + 20:
-        return "TP1 50.0%", 1, 50.0
-
-    fast_ema = ta.ema(df['close'], length=fast_len).to_numpy()
-    slow_ema = ta.ema(df['close'], length=slow_len).to_numpy()
-    atr = ta.atr(df['high'], df['low'], df['close'], length=atr_len).to_numpy()
-    closes = df['close'].to_numpy()
-    highs = df['high'].to_numpy()
-    lows = df['low'].to_numpy()
-
-    n = len(df)
-    prev_f, curr_f = fast_ema[slow_len-1:n-21], fast_ema[slow_len:n-20]
-    prev_s, curr_s = slow_ema[slow_len-1:n-21], slow_ema[slow_len:n-20]
-
-    crossovers = (prev_f <= prev_s) & (curr_f > curr_s)
-    crossunders = (prev_f >= prev_s) & (curr_f < curr_s)
-    signal_indices = np.where(crossovers | crossunders)[0] + slow_len
-
-    total_trades, tp1_hits, tp2_hits, tp3_hits = 0, 0, 0, 0
-
-    for i in signal_indices:
-        atr_v = atr[i]
-        if np.isnan(atr_v) or atr_v == 0:
-            continue
-
-        direction = 1 if fast_ema[i] > slow_ema[i] else -1
-        entry_price = closes[i]
-        total_trades += 1
-
-        end_j = min(i + 30, n)
-        if direction == 1:
-            max_h = np.max(highs[i+1:end_j])
-            if max_h >= entry_price + tp1_val * atr_v: tp1_hits += 1
-            if max_h >= entry_price + tp2_val * atr_v: tp2_hits += 1
-            if max_h >= entry_price + tp3_val * atr_v: tp3_hits += 1
-        else:
-            min_l = np.min(lows[i+1:end_j])
-            if min_l <= entry_price - tp1_val * atr_v: tp1_hits += 1
-            if min_l <= entry_price - tp2_val * atr_v: tp2_hits += 1
-            if min_l <= entry_price - tp3_val * atr_v: tp3_hits += 1
-
-    tr = max(1, total_trades)
-    rates = [(1, (tp1_hits / tr) * 100), (2, (tp2_hits / tr) * 100), (3, (tp3_hits / tr) * 100)]
-    best_tp, best_rate = max(rates, key=lambda x: x[1])
-
-    return f"TP{best_tp} {best_rate:.1f}%", best_tp, best_rate
-
-# ==========================================
-# CORE ALERT PROCESSOR (EXACT ORIGINAL MESSAGE FORMAT)
-# ==========================================
-def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, tp_bubble=None, cooldown_sec=14400, level_name=None):
+def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, cooldown_sec=14400, level_name=None):
     global tg_alert_cache
     now_utc = datetime.now(timezone.utc)
     
@@ -297,7 +246,6 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
     price_str = f"{currency_symbol}{price:,.2f}" if isinstance(price, (int, float)) else "N/A"
     rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
-    bubble_str = f"`{tp_bubble}`" if tp_bubble else "N/A"
 
     if category_title == "DEMAND":
         header_text = "🟢 *[DEMAND]* 🟢\n\n"
@@ -317,7 +265,6 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
         f"• *Price:* `{price_str}`\n"
         f"• *RSI (5M):* `{rsi_5m_str}`\n"
         f"• *RSI (15M):* `{rsi_15m_str}`\n"
-        f"• *Suggested TP Bubble:* {bubble_str}\n"
         f"• *Time (IST):* `{ist_time_str}`"
     )
 
@@ -332,8 +279,8 @@ def analyze_market(symbol_key):
             return
 
         cfg = SYMBOL_CONFIG[symbol_key]
-        df_main = fetch_candles(symbol_key, interval=cfg["interval_tv"], n_bars=150)
-        if df_main is None or len(df_main) < 50:
+        df_main = fetch_candles(symbol_key, interval=cfg["interval_tv"], n_bars=50)
+        if df_main is None or len(df_main) < 20:
             return
 
         live_price = float(df_main['close'].iloc[-1])
@@ -342,7 +289,7 @@ def analyze_market(symbol_key):
 
         htf_levels, support_bands, resistance_bands = get_ui_levels(symbol_key)
 
-        def get_alert_metrics():
+        def get_rsi_metrics():
             df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
             rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
 
@@ -353,17 +300,16 @@ def analyze_market(symbol_key):
             else:
                 rsi_5m = np.nan
 
-            tp_bubble, _, _ = calculate_suggested_tp_bubble(df_main)
-            return rsi_5m, rsi_15m, tp_bubble
+            return rsi_5m, rsi_15m
 
-        metrics_cache = None
+        rsi_cache = None
 
         # 1. TWO SUPPORT BANDS (Daily Weak Demand & Daily Strong Demand)
         for band_name, (z_low, z_high) in support_bands.items():
             if live_low <= z_high and live_price >= z_low:
-                if metrics_cache is None:
-                    metrics_cache = get_alert_metrics()
-                rsi_5m, rsi_15m, tp_bubble = metrics_cache
+                if rsi_cache is None:
+                    rsi_cache = get_rsi_metrics()
+                rsi_5m, rsi_15m = rsi_cache
                 process_alert(
                     alert_key=f"{symbol_key}_INSTANT_DEMAND_{band_name}_{z_high}",
                     symbol_key=symbol_key,
@@ -371,16 +317,15 @@ def analyze_market(symbol_key):
                     price=live_price,
                     rsi_5m=rsi_5m,
                     rsi_15m=rsi_15m,
-                    tp_bubble=tp_bubble,
                     cooldown_sec=ZONE_COOLDOWN_SEC
                 )
 
         # 2. TWO RESISTANCE BANDS (Daily Weak Supply & Daily Strong Supply)
         for band_name, (z_low, z_high) in resistance_bands.items():
             if live_high >= z_low and live_price <= z_high:
-                if metrics_cache is None:
-                    metrics_cache = get_alert_metrics()
-                rsi_5m, rsi_15m, tp_bubble = metrics_cache
+                if rsi_cache is None:
+                    rsi_cache = get_rsi_metrics()
+                rsi_5m, rsi_15m = rsi_cache
                 process_alert(
                     alert_key=f"{symbol_key}_INSTANT_SUPPLY_{band_name}_{z_low}",
                     symbol_key=symbol_key,
@@ -388,7 +333,6 @@ def analyze_market(symbol_key):
                     price=live_price,
                     rsi_5m=rsi_5m,
                     rsi_15m=rsi_15m,
-                    tp_bubble=tp_bubble,
                     cooldown_sec=ZONE_COOLDOWN_SEC
                 )
 
@@ -400,9 +344,9 @@ def analyze_market(symbol_key):
             near_level = (abs(live_price - lvl_val) / lvl_val <= 0.0003)
 
             if touched_intrabar or near_level:
-                if metrics_cache is None:
-                    metrics_cache = get_alert_metrics()
-                rsi_5m, rsi_15m, tp_bubble = metrics_cache
+                if rsi_cache is None:
+                    rsi_cache = get_rsi_metrics()
+                rsi_5m, rsi_15m = rsi_cache
                 process_alert(
                     alert_key=f"{symbol_key}_INSTANT_LEVEL_{lvl_name}_{round(lvl_val)}",
                     symbol_key=symbol_key,
@@ -410,7 +354,6 @@ def analyze_market(symbol_key):
                     price=live_price,
                     rsi_5m=rsi_5m,
                     rsi_15m=rsi_15m,
-                    tp_bubble=tp_bubble,
                     cooldown_sec=ZONE_COOLDOWN_SEC,
                     level_name=lvl_name
                 )
