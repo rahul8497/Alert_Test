@@ -118,7 +118,7 @@ def send_telegram_message(message):
 # ==========================================
 # 🟢 TRADINGVIEW CANDLE FETCHING ENGINE
 # ==========================================
-def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=50):
+def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=150):
     cfg = SYMBOL_CONFIG.get(symbol_key)
     if not cfg:
         return None
@@ -135,6 +135,7 @@ def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=50):
             if df is not None and not df.empty:
                 df.reset_index(inplace=True)
                 df.rename(columns={c: str(c).lower() for c in df.columns}, inplace=True)
+                df.rename(columns={"datetime": "timestamp", "date": "timestamp"}, inplace=True)
                 return df
         except Exception as e:
             print(f"TradingView Candle fetch error for {symbol_key}: {e}")
@@ -248,9 +249,9 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
 
     if category_title == "DEMAND":
-        header_text = "🟢 *[DEMAND]* 🟢\n\n"
+        header_text = f"🟢 *[DEMAND: {level_name}]* 🟢\n\n" if level_name else "🟢 *[DEMAND]* 🟢\n\n"
     elif category_title == "SUPPLY":
-        header_text = "🔴 *[SUPPLY]* 🔴\n\n"
+        header_text = f"🔴 *[SUPPLY: {level_name}]* 🔴\n\n" if level_name else "🔴 *[SUPPLY]* 🔴\n\n"
     elif category_title == "IMPORTANT LEVEL":
         header_text = f"🟡 *[IMPORTANT LEVEL: {level_name}]* 🟡\n\n" if level_name else "🟡 *[IMPORTANT LEVEL]* 🟡\n\n"
     elif category_title == "TREND CHANGING":
@@ -279,7 +280,7 @@ def analyze_market(symbol_key):
             return
 
         cfg = SYMBOL_CONFIG[symbol_key]
-        df_main = fetch_candles(symbol_key, interval=cfg["interval_tv"], n_bars=50)
+        df_main = fetch_candles(symbol_key, interval=cfg["interval_tv"], n_bars=150)
         if df_main is None or len(df_main) < 20:
             return
 
@@ -293,8 +294,8 @@ def analyze_market(symbol_key):
             df_main['rsi_15m_calc'] = ta.rsi(df_main['close'], length=14, mamode='rma')
             rsi_15m = float(df_main['rsi_15m_calc'].iloc[-1])
 
-            df_5m_temp = fetch_candles(symbol_key, interval=Interval.in_5_minute, n_bars=50)
-            if df_5m_temp is not None and len(df_5m_temp) >= 15:
+            df_5m_temp = fetch_candles(symbol_key, interval=Interval.in_5_minute, n_bars=150)
+            if df_5m_temp is not None and len(df_5m_temp) >= 20:
                 df_5m_temp['rsi_5m_calc'] = ta.rsi(df_5m_temp['close'], length=14, mamode='rma')
                 rsi_5m = float(df_5m_temp['rsi_5m_calc'].iloc[-1])
             else:
@@ -317,7 +318,8 @@ def analyze_market(symbol_key):
                     price=live_price,
                     rsi_5m=rsi_5m,
                     rsi_15m=rsi_15m,
-                    cooldown_sec=ZONE_COOLDOWN_SEC
+                    cooldown_sec=ZONE_COOLDOWN_SEC,
+                    level_name=band_name
                 )
 
         # 2. TWO RESISTANCE BANDS (Daily Weak Supply & Daily Strong Supply)
@@ -333,7 +335,8 @@ def analyze_market(symbol_key):
                     price=live_price,
                     rsi_5m=rsi_5m,
                     rsi_15m=rsi_15m,
-                    cooldown_sec=ZONE_COOLDOWN_SEC
+                    cooldown_sec=ZONE_COOLDOWN_SEC,
+                    level_name=band_name
                 )
 
         # 3. HTF & PIVOT BADGES (PDH, PDL, PWH, PWL, PMH, PML, PP, Gann Base)
@@ -395,7 +398,7 @@ app = Flask(__name__)
 @app.route('/health')
 def home():
     ensure_scanner_running()
-    return "Bot Status: ONLINE | Complete Engine (PDH, PDL, PP, Gann + Strict ML) Active", 200
+    return "Bot Status: ONLINE | HTF, Support & Resistance Engine Active", 200
 
 if __name__ == "__main__":
     ensure_scanner_running()
