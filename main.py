@@ -227,7 +227,7 @@ def get_ui_levels(symbol_key):
     return htf, supports, resistances
 
 # ==========================================
-# CORE ALERT PROCESSOR
+# CORE ALERT PROCESSOR (TV UI COLOR-MATCHED)
 # ==========================================
 def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None, rsi_15m=None, cooldown_sec=14400, level_name=None):
     global tg_alert_cache
@@ -252,12 +252,26 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
     rsi_5m_str = f"{rsi_5m:.2f}" if isinstance(rsi_5m, (int, float)) and not pd.isna(rsi_5m) else "N/A"
     rsi_15m_str = f"{rsi_15m:.2f}" if isinstance(rsi_15m, (int, float)) and not pd.isna(rsi_15m) else "N/A"
 
+    # Match Telegram Header Color Emoji to TradingView Chart Badge Colors
     if category_title == "DEMAND":
         header_text = f"🟢 *[DEMAND: {level_name}]* 🟢\n\n" if level_name else "🟢 *[DEMAND]* 🟢\n\n"
     elif category_title == "SUPPLY":
         header_text = f"🔴 *[SUPPLY: {level_name}]* 🔴\n\n" if level_name else "🔴 *[SUPPLY]* 🔴\n\n"
     elif category_title == "IMPORTANT LEVEL":
-        header_text = f"🟡 *[IMPORTANT LEVEL: {level_name}]* 🟡\n\n" if level_name else "🟡 *[IMPORTANT LEVEL]* 🟡\n\n"
+        if level_name in ["PDH", "PDL"]:
+            badge_icon = "🟡"  # Yellow badge on TV chart
+        elif level_name in ["PWH", "PWL"]:
+            badge_icon = "🟠"  # Orange badge on TV chart
+        elif level_name in ["PMH", "PML"]:
+            badge_icon = "🟣"  # Purple badge on TV chart
+        elif level_name == "PP":
+            badge_icon = "🩵"  # Light Blue badge on TV chart
+        elif level_name == "Gann Base":
+            badge_icon = "🔵"  # Dark Blue badge on TV chart
+        else:
+            badge_icon = "🟡"
+            
+        header_text = f"{badge_icon} *[IMPORTANT LEVEL: {level_name}]* {badge_icon}\n\n" if level_name else f"{badge_icon} *[IMPORTANT LEVEL]* {badge_icon}\n\n"
     elif category_title == "TREND CHANGING":
         header_text = "🔄 *[TREND CHANGING]* 🔄\n\n"
     else:
