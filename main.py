@@ -150,6 +150,41 @@ def fetch_candles(symbol_key, interval=Interval.in_15_minute, n_bars=150):
     return None
 
 # ==========================================
+# 📊 VOLUME PROFILE POC HELPER (WEEKLY POC)
+# ==========================================
+def calculate_poc(df, bins=50):
+    if df is None or df.empty or 'volume' not in df.columns:
+        return np.nan
+    df_valid = df[df['volume'] > 0].copy()
+    if df_valid.empty:
+        return np.nan
+
+    low_min = float(df_valid['low'].min())
+    high_max = float(df_valid['high'].max())
+    if high_max <= low_min:
+        return float(df_valid['close'].iloc[-1])
+
+    bin_edges = np.linspace(low_min, high_max, bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+    vol_profile = np.zeros(bins)
+
+    for _, row in df_valid.iterrows():
+        c_low = float(row['low'])
+        c_high = float(row['high'])
+        c_vol = float(row['volume'])
+        if c_high == c_low:
+            idx = np.clip(np.digitize(c_low, bin_edges) - 1, 0, bins - 1)
+            vol_profile[idx] += c_vol
+        else:
+            overlapping = (bin_edges[1:] >= c_low) & (bin_edges[:-1] <= c_high)
+            count = int(np.sum(overlapping))
+            if count > 0:
+                vol_profile[overlapping] += c_vol / count
+
+    poc_idx = int(np.argmax(vol_profile))
+    return float(bin_centers[poc_idx])
+
+# ==========================================
 # 📈 HTF & PIVOT BADGES + 2 SUPPORT & 2 RESISTANCE BANDS
 # ==========================================
 def get_ui_levels(symbol_key):
@@ -211,7 +246,21 @@ def get_ui_levels(symbol_key):
         htf["PWH"] = float(df_w['high'].iloc[-2])
         htf["PWL"] = float(df_w['low'].iloc[-2])
 
-    # 3. MONTHLY HTF (PMH, PML)
+    # 3. WEEKLY POC (Calculated from 1H bars of the prior completed week)
+    df_1h = fetch_candles(symbol_key, interval=Interval.in_1_hour, n_bars=340)
+    if df_1h is not None and 'timestamp' in df_1h.columns and len(df_1h) >= 48:
+        df_1h['ts'] = pd.to_datetime(df_1h['timestamp'])
+        df_1h['iso_year'] = df_1h['ts'].dt.isocalendar().year
+        df_1h['iso_week'] = df_1h['ts'].dt.isocalendar().week
+        weeks = df_1h[['iso_year', 'iso_week']].drop_duplicates().values.tolist()
+        if len(weeks) >= 2:
+            prev_yr, prev_wk = weeks[-2]
+            df_prev_week = df_1h[(df_1h['iso_year'] == prev_yr) & (df_1h['iso_week'] == prev_wk)]
+            weekly_poc = calculate_poc(df_prev_week, bins=60)
+            if not pd.isna(weekly_poc):
+                htf["Weekly POC"] = weekly_poc
+
+    # 4. MONTHLY HTF (PMH, PML)
     df_m = fetch_candles(symbol_key, interval=Interval.in_monthly, n_bars=5)
     if df_m is not None and len(df_m) >= 2:
         htf["PMH"] = float(df_m['high'].iloc[-2])
@@ -258,8 +307,8 @@ def process_alert(alert_key, symbol_key, category_title, price=None, rsi_5m=None
     elif category_title == "SUPPLY":
         header_text = f"🔴 *[SUPPLY: {level_name}]* 🔴\n\n" if level_name else "🔴 *[SUPPLY]* 🔴\n\n"
     elif category_title == "IMPORTANT LEVEL":
-        if level_name in ["PDH", "PDL"]:
-            badge_icon = "🟡"  # Yellow badge on TV chart
+        if level_name in ["PDH", "PDL", "Weekly POC"]:
+            badge_icon = "🟡"  # Yellow / Gold badge on TV chart
         elif level_name in ["PWH", "PWL"]:
             badge_icon = "🟠"  # Orange badge on TV chart
         elif level_name in ["PMH", "PML"]:
@@ -357,7 +406,7 @@ def analyze_market(symbol_key):
                     level_name=band_name
                 )
 
-        # 3. HTF & PIVOT BADGES (PDH, PDL, PWH, PWL, PMH, PML, PP, Gann Base)
+        # 3. HTF & PIVOT BADGES (PDH, PDL, PWH, PWL, Weekly POC, PMH, PML, PP, Gann Base)
         for lvl_name, lvl_val in htf_levels.items():
             if pd.isna(lvl_val) or lvl_val == 0:
                 continue
