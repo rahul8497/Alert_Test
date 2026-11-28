@@ -22,10 +22,13 @@ if not hasattr(np, 'bool'):
     np.bool = bool
 
 # ==========================================
-# 🚨 CREDENTIALS (PERSONAL TELEGRAM ONLY) 🚨
+# 🚨 CREDENTIALS (GROUP + PERSONAL TELEGRAM) 🚨
 # ==========================================
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8992095386:AAFexnI8IRh990PlwZtkn6WkjeOV0yHjkCE")
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "-5385748601")
 PERSONAL_CHAT_ID = os.environ.get("PERSONAL_CHAT_ID", "1136613703")
+
+TELEGRAM_CHAT_IDS = [cid.strip() for cid in [GROUP_CHAT_ID, PERSONAL_CHAT_ID] if cid and cid.strip()]
 
 http_session = requests.Session()
 
@@ -105,15 +108,16 @@ def is_market_open(symbol_key):
 # ==========================================
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": PERSONAL_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    for _ in range(2):
-        try:
-            resp = http_session.post(url, json=payload, timeout=10)
-            if resp.status_code == 200:
-                return
-        except Exception as e:
-            print(f"Error sending Telegram notification: {e}")
-            time.sleep(1)
+    for chat_id in TELEGRAM_CHAT_IDS:
+        payload = {"chat_id": chat_id, "text": message, "parse_mode": "Markdown"}
+        for _ in range(2):
+            try:
+                resp = http_session.post(url, json=payload, timeout=10)
+                if resp.status_code == 200:
+                    break
+            except Exception as e:
+                print(f"Error sending Telegram notification to {chat_id}: {e}")
+                time.sleep(1)
 
 # ==========================================
 # 🟢 TRADINGVIEW CANDLE FETCHING ENGINE
